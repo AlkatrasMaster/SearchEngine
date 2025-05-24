@@ -9,10 +9,7 @@ import javax.persistence.*;
 @Entity
 @Getter
 @Setter
-@Table(name = "page",
-        indexes = {
-        @Index(name = "idx_path", columnList = "path")
-        })
+@Table(name = "page")
 public class PageModel {
 
     @Id
@@ -23,7 +20,7 @@ public class PageModel {
     @JoinColumn(name = "site_id", nullable = false)
     private SiteModel siteModel;
 
-    @Column(name = "path", columnDefinition = "TEXT", nullable = false)
+    @Column(name = "path", length = 255, columnDefinition = "VARCHAR(255)", nullable = false)
     private String path;
 
     @Column(nullable = false)
