@@ -9,7 +9,10 @@ import javax.persistence.*;
 @Entity
 @Getter
 @Setter
-@Table(name = "page")
+@Table(name = "page",
+        indexes = {
+        @Index(name = "idx_path", columnList = "path", unique = true)
+        })
 public class PageModel {
 
     @Id

@@ -2,28 +2,21 @@ package searchengine.services;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import searchengine.config.SitesList;
+import searchengine.config.CrawlerSettings;
+import searchengine.config.Site;
 import searchengine.exceptions.IndexingAlreadyRunningException;
-import searchengine.model.PageModel;
 import searchengine.model.SiteModel;
 import searchengine.model.enums.IndexStatus;
+import searchengine.processors.PageProcessorTask;
 import searchengine.repository.PageRepository;
 import searchengine.repository.SiteRepository;
 
-import javax.swing.text.html.parser.DocumentParser;
-import javax.transaction.Status;
+
 import javax.transaction.Transactional;
-import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Queue;
+import java.util.*;
+import java.util.concurrent.ForkJoinPool;
 
 @Service
 @Slf4j
@@ -31,20 +24,21 @@ public class IndexingService {
 
     private final SiteRepository siteRepository;
     private final PageRepository pageRepository;
-    private final SitesList sitesList;
     private volatile boolean isIndexingRunning = false;
     private final HttpClient httpClient;
 
+    private final CrawlerSettings crawlerSettings;
 
-    public IndexingService(SiteRepository siteRepository, PageRepository pageRepository, SitesList sitesList, HttpClient httpClient, DocumentParser documentParser) {
+
+    public IndexingService(SiteRepository siteRepository, PageRepository pageRepository, CrawlerSettings crawlerSettings) {
         this.siteRepository = siteRepository;
         this.pageRepository = pageRepository;
-        this.sitesList = sitesList;
+        this.crawlerSettings = crawlerSettings;
         this.httpClient = HttpClient.newHttpClient();
     }
 
     @Transactional
-    public void startIndexing() {
+    public void startIndexing() throws InterruptedException {
         if (isIndexingRunning) {
             throw new IndexingAlreadyRunningException("Индексация уже запущена");
         }
@@ -55,10 +49,28 @@ public class IndexingService {
         try {
             // Получаем список сайтов из конфигурации
             List<SiteModel> sites = siteRepository.findAll();
+            List<Thread> indexingThreads = new ArrayList<>();
 
-            // Обрабатываем каждый сайт
+            // Создаем и запускаем поток для каждого сайта
             for (SiteModel site : sites) {
-                processSite(site);
+                Thread thread = new Thread(() -> {
+                    try {
+                        processSite(site);
+                    } catch (Exception e) {
+                        log.error("Ошибка при обработке сайта {}: {}", site.getName(), e.getMessage());
+                        updateSiteStatusAndError(site, IndexStatus.FAILED, e.getMessage());
+                    }
+                });
+                thread.setName("IndexingThread-" + site.getName());
+                thread.start();
+                indexingThreads.add(thread);
+
+            }
+
+            // Проверяем статус потоков каждые 5 секунд
+            while (hasActiveThread(indexingThreads)) {
+                Thread.sleep(5000);
+                log.info("Индексация продолжается...");
             }
 
             log.info("Процесс индексации завершен успешно");
@@ -68,6 +80,39 @@ public class IndexingService {
         } finally {
             isIndexingRunning = false;
         }
+    }
+
+    private boolean hasActiveThread(List<Thread> threads) {
+        return threads.stream()
+                .anyMatch(thread -> thread.isAlive());
+    }
+
+    @Transactional
+    public Map<String, Object> stopIndexing() {
+        if (!isIndexingRunning) {
+            return Map.of(
+                    "result", false,
+                    "error", "Индексация не запущена"
+            );
+        }
+
+        log.info("Запрошена остановка процесса индексации");
+
+        // Останавливаем все потоки
+        isIndexingRunning = false;
+
+        // Получаем список сайтов, которые находятся в процессе индексации
+        List<SiteModel> indexingSites = siteRepository.findByStatus(IndexStatus.INDEXED);
+
+        // Обновляем статус всех сайтов в процессе индексации
+        for (SiteModel site : indexingSites) {
+            updateSiteStatusAndError(
+                    site,
+                    IndexStatus.FAILED,
+                    "Индексация остановлена пользователем"
+            );
+        }
+        return Map.of("result", true);
     }
 
     private void processSite(SiteModel site) {
@@ -103,68 +148,11 @@ public class IndexingService {
         Queue<String> urlsToProcess = new LinkedList<>();
         urlsToProcess.add(site.getUrl());
 
-        while (!urlsToProcess.isEmpty()) {
-            String currentUrl = urlsToProcess.poll();
-
-            try {
-                // Получаем содержимое страницы
-                String content = fetchPageContent(currentUrl);
-
-                // Сохраняем страницу в базу данных
-                PageModel page = new PageModel();
-                page.setSiteModel(site);
-                page.setPath(getRelativePath(currentUrl, site.getUrl()));
-                page.setContent(content);
-                pageRepository.save(page);
-
-                // Обновляем время статуса сайта
-                updateSiteStatusTime(site);
-
-                // Добавляем найденные ссылки в очередь
-                urlsToProcess.addAll(extractLinks(content, site.getUrl()));
-
-            } catch (Exception e) {
-                log.error("Ошибка при обработке страницы {}: {}", currentUrl, e.getMessage());
-                throw e;
-            }
-        }
+        ForkJoinPool pool = new ForkJoinPool();
+        pool.invoke(new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings));
     }
 
-    private String fetchPageContent(String url) {
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .GET()
-                .build();
 
-        try {
-            HttpResponse<String> response = httpClient.send(request,
-                    HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                throw new RuntimeException("Ошибка при получении страницы: " + response.statusCode());
-            }
-
-            return response.body();
-        } catch (IOException | InterruptedException e) {
-            throw new RuntimeException("Ошибка при получении содержимого страницы: " + e.getMessage());
-        }
-    }
-
-    private String getRelativePath(String absoluteUrl, String baseUrl) {
-        try {
-            URI absoluteUri = new URI(absoluteUrl);
-            URI baseUri = new URI(baseUrl);
-            return absoluteUri.relativize(baseUri).getPath();
-        } catch (URISyntaxException e) {
-            throw new RuntimeException("Ошибка при обработке URL: " + e.getMessage());
-        }
-    }
-
-    private List<String> extractLinks(String content, String baseUrl) {
-        List<String> links = new ArrayList<>();
-        // Реализация извлечения ссылок из HTML
-        return links;
-    }
 
     private void updateSiteStatus(SiteModel site, IndexStatus status) {
         site.setStatus(status);
@@ -179,8 +167,4 @@ public class IndexingService {
         siteRepository.save(site);
     }
 
-    private void updateSiteStatusTime(SiteModel site) {
-        site.setStatusTime(LocalDateTime.now());
-        siteRepository.save(site);
-    }
 }
