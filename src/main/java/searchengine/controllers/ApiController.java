@@ -5,13 +5,12 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import searchengine.dto.statistics.StatisticsResponse;
-import searchengine.exceptions.IndexingAlreadyRunningException;
 import searchengine.services.IndexingService;
+import searchengine.services.IndexingServiceImpl;
 import searchengine.services.StatisticsService;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 
 @RestController
 @RequestMapping("/api")
@@ -20,7 +19,7 @@ public class ApiController {
     private final StatisticsService statisticsService;
     private final IndexingService indexingService;
 
-    public ApiController(StatisticsService statisticsService, IndexingService indexingService) {
+    public ApiController(StatisticsService statisticsService, IndexingServiceImpl indexingServiceImpl, IndexingService indexingService) {
         this.statisticsService = statisticsService;
         this.indexingService = indexingService;
     }
@@ -33,36 +32,42 @@ public class ApiController {
     @GetMapping("/startIndexing")
     public ResponseEntity<Map<String, Object>>  startIndexing() {
         try {
-            indexingService.startIndexing();
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", true);
-            return ResponseEntity.ok(response);
-        } catch (IndexingAlreadyRunningException e) {
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", false);
-            response.put("error", e.getMessage());
-            return ResponseEntity.badRequest().body(response);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt(); // Восстанавливаем флаг прерывания
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", false);
-            response.put("error", "Процесс индексации был прерван");
-            return ResponseEntity.badRequest().body(response);
-        }
-    }
+            // Проверяем, не запущен ли процесс индексации
+            if (indexingService.isIndexingRunning()) {
+                Map<String, Object> response = new HashMap<>();
+                response.put("result", false);
+                response.put("error", "Индексация уже запущена");
+                return ResponseEntity.badRequest().body(response);
+            }
 
-    @GetMapping("/stopIndexing")
-    public ResponseEntity<Map<String, Object>> stopIndexing() {
-        try {
-            Map<String, Object> responce = indexingService.stopIndexing();
+            // Запускаем процесс индексации
+            indexingService.startIndexing();
+
+            // Создаем успешный ответ
+            Map<String, Object> responce = new HashMap<>();
+            responce.put("result", true);
             return ResponseEntity.ok(responce);
         } catch (Exception e) {
+            // Обработка других исключений
             Map<String, Object> responce = new HashMap<>();
             responce.put("result", false);
-            responce.put("error", e.getMessage());
+            responce.put("error", "Произошла ошибка при запуске индексации: " + e.getMessage());
             return ResponseEntity.badRequest().body(responce);
         }
-
     }
+
+//    @GetMapping("/stopIndexing")
+//    public ResponseEntity<Map<String, Object>> stopIndexing() {
+//        try {
+//            Map<String, Object> responce = indexingServiceImpl.stopIndexing();
+//            return ResponseEntity.ok(responce);
+//        } catch (Exception e) {
+//            Map<String, Object> responce = new HashMap<>();
+//            responce.put("result", false);
+//            responce.put("error", e.getMessage());
+//            return ResponseEntity.badRequest().body(responce);
+//        }
+//
+//    }
 
 }

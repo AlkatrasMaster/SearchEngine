@@ -16,13 +16,14 @@ public class SiteModel {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "id")
     private Integer id;
 
     @Enumerated(EnumType.STRING)
     @Column(columnDefinition = "ENUM('INDEXING', 'INDEXED', 'FAILED')")
     private IndexStatus status;
 
-    @Column(nullable = false)
+    @Column(name = "status_time")
     private LocalDateTime statusTime;
 
     @Column(columnDefinition = "VARCHAR(255)", nullable = false)

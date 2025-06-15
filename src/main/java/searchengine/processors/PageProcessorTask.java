@@ -1,13 +1,11 @@
 package searchengine.processors;
 
 import lombok.RequiredArgsConstructor;
-import lombok.extern.log4j.Log4j;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import searchengine.config.CrawlerSettings;
 import searchengine.model.PageModel;
@@ -15,7 +13,6 @@ import searchengine.model.SiteModel;
 import searchengine.model.enums.IndexStatus;
 import searchengine.repository.PageRepository;
 import searchengine.repository.SiteRepository;
-import searchengine.services.IndexingService;
 
 import java.io.IOException;
 import java.net.URI;
@@ -24,10 +21,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Queue;
+import java.util.*;
 import java.util.concurrent.RecursiveAction;
 
 @RequiredArgsConstructor
@@ -35,6 +29,7 @@ import java.util.concurrent.RecursiveAction;
 public class PageProcessorTask extends RecursiveAction {
 
     private final Queue<String> urlsToProcess;
+    private final Set<String> processedUrls;
     private final SiteModel site;
     private final HttpClient httpClient;
     private final PageRepository pageRepository;
@@ -60,8 +55,8 @@ public class PageProcessorTask extends RecursiveAction {
         }
 
         // Создаем подзадачи
-        PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings);
-        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings);
+        PageProcessorTask task1 = new PageProcessorTask(halfUrls, processedUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings);
+        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, processedUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings);
 
         // Запускаем параллельно
         task1.fork();
@@ -73,53 +68,70 @@ public class PageProcessorTask extends RecursiveAction {
     }
 
     private void processSequentially() {
+
         while (!urlsToProcess.isEmpty() && currentDepth < MAX_DEPTH) {
             String currentUrl = urlsToProcess.poll();
 
+            // Проверяем, не обрабатывалась ли страница ранее
+            if (processedUrls.contains(currentUrl)) {
+                continue;
+            }
+
             try {
-                // Проверяем, была ли страница обработана
-                if (!pageRepository.existsByPathAndSiteModel(currentUrl, site)) {
-
-                    // Получаем содержимое страницы
-                    String content = fetchPageContent(currentUrl);
-
-                    // Сохраняем страницу в базу данных
-                    PageModel page = new PageModel();
-                    page.setSiteModel(site);
-                    page.setPath(getRelativePath(currentUrl, site.getUrl()));
-                    page.setContent(content);
-
-                    try {
-
-                        pageRepository.save(page);
-                        // Обновляем время статуса сайта
-                        updateSiteStatusTime(site);
-
-                        // Добавляем найденные ссылки в очередь
-                        List<String> newUrls = extractLinks(content, site.getUrl());
-                        urlsToProcess.addAll(newUrls);
-                    } catch (DataIntegrityViolationException e) {
-                        log.warn("Страница {} уже существует в базе данных", currentUrl);
-                    }
-                }
-
-            } catch (Exception e) {
-                log.error("Ошибка при обработке страницы {}: {}", currentUrl, e.getMessage());
+                // Проверяем, является ли URL частью текущего сайта
+                i
             }
         }
+//        while (!urlsToProcess.isEmpty() && currentDepth < MAX_DEPTH) {
+//            String currentUrl = urlsToProcess.poll();
+//
+//            try {
+//                if (!pageRepository.existsByPathAndSiteModel(currentUrl, site)) {
+//                    String content = fetchPageContent(currentUrl);
+//                    PageModel page = new PageModel();
+//                    page.setSiteModel(site);
+//                    page.setPath(getRelativePath(currentUrl, site.getUrl()));
+//                    page.setContent(content);
+//                    page.setCode(getResponseCode(currentUrl));
+//
+//                    try {
+//                        pageRepository.save(page);
+//                        updateSiteStatusTime(site);
+//
+//                        List<String> newUrls = extractLinks(content, site.getUrl());
+//                        urlsToProcess.addAll(newUrls);
+//                    } catch (DataIntegrityViolationException e) {
+//                        log.warn("Страница {} уже существует в базе данных", currentUrl);
+//                    }
+//                }
+//            } catch (Exception e) {
+//                log.error("Ошибка при обработке страницы {}: {}", currentUrl, e.getMessage());
+//                updateSiteStatusAndError(site, IndexStatus.FAILED, e.getMessage());
+//            }
+//        }
     }
+
+    private boolean isUrlPartOfSite(String url, String siteUrl)
+
 
     private String fetchPageContent(String url) {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .GET()
-                .header("User-Agent", crawlerSettings.getUserAgent())
-                .header("Referer", crawlerSettings.getReferrer())
+                .header("User-Agent", Optional.ofNullable(crawlerSettings.getUserAgent())
+                        .orElse("Mozilla/5.0"))
+                .header("Referer", Optional.ofNullable(crawlerSettings.getReferrer())
+                        .orElse("https://www.google.com"))
                 .build();
 
         try {
             HttpResponse<String> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == 301 || response.statusCode() == 302) {
+                String location = response.headers().firstValue("Location").orElse("");
+                return fetchPageContent(location); // Рекурсивный вызов для обработки редиректа
+            }
 
             if (response.statusCode() != 200) {
                 throw new RuntimeException("Ошибка при получении страницы: " + response.statusCode());
@@ -167,6 +179,29 @@ public class PageProcessorTask extends RecursiveAction {
             }
         }
         return urls;
+    }
+
+    private void updateSiteStatusAndError(SiteModel site, IndexStatus status, String error) {
+        site.setStatus(status);
+        site.setLastError(error);
+        site.setStatusTime(LocalDateTime.now());
+        siteRepository.save(site);
+    }
+
+    private int getResponseCode(String url) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody())
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request,
+                    HttpResponse.BodyHandlers.ofString());
+            return response.statusCode();
+        } catch (IOException | InterruptedException e) {
+            log.warn("Не удалось получить код ответа для URL {}: {}", url, e.getMessage());
+            return 0; // или выберите другое значение по умолчанию
+        }
     }
 
 }

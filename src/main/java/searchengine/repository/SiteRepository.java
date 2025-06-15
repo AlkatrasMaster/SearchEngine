@@ -18,4 +18,6 @@ public interface SiteRepository extends JpaRepository<SiteModel, Integer> {
 
     Integer countByStatus(IndexStatus status);
 
+    void deleteByUrl(String url);
+
 }

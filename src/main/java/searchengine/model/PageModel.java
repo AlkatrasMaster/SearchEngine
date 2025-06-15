@@ -11,7 +11,7 @@ import javax.persistence.*;
 @Setter
 @Table(name = "page",
         indexes = {
-        @Index(name = "idx_path", columnList = "path", unique = true)
+                @Index(name = "idx_path", columnList = "path", unique = true)
         })
 public class PageModel {
 
@@ -23,7 +23,7 @@ public class PageModel {
     @JoinColumn(name = "site_id", nullable = false)
     private SiteModel siteModel;
 
-    @Column(name = "path", length = 255, columnDefinition = "VARCHAR(255)", nullable = false)
+    @Column(name = "path", columnDefinition = "VARCHAR(255)")
     private String path;
 
     @Column(nullable = false)
@@ -32,3 +32,6 @@ public class PageModel {
     @Column(columnDefinition = "MEDIUMTEXT", nullable = false)
     private String content;
 }
+
+
+
