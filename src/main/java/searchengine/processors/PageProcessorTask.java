@@ -29,7 +29,6 @@ import java.util.concurrent.RecursiveAction;
 public class PageProcessorTask extends RecursiveAction {
 
     private final Queue<String> urlsToProcess;
-    private final Set<String> processedUrls;
     private final SiteModel site;
     private final HttpClient httpClient;
     private final PageRepository pageRepository;
@@ -55,8 +54,8 @@ public class PageProcessorTask extends RecursiveAction {
         }
 
         // Создаем подзадачи
-        PageProcessorTask task1 = new PageProcessorTask(halfUrls, processedUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings);
-        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, processedUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings);
+        PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings);
+        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings);
 
         // Запускаем параллельно
         task1.fork();
@@ -68,51 +67,27 @@ public class PageProcessorTask extends RecursiveAction {
     }
 
     private void processSequentially() {
-
         while (!urlsToProcess.isEmpty() && currentDepth < MAX_DEPTH) {
             String currentUrl = urlsToProcess.poll();
 
-            // Проверяем, не обрабатывалась ли страница ранее
-            if (processedUrls.contains(currentUrl)) {
-                continue;
-            }
-
             try {
-                // Проверяем, является ли URL частью текущего сайта
-                i
+                if (!pageRepository.existsByPathAndSiteModel(currentUrl, site)) {
+                    String content = fetchPageContent(currentUrl);
+                    PageModel page = new PageModel();
+                    page.setSiteModel(site);
+                    page.setPath(getRelativePath(currentUrl, site.getUrl()));
+                    page.setContent(content);
+                    page.setCode(getResponseCode(currentUrl));
+
+                    // Извлекаем новые ссылки и добавляем в очередь
+                    List<String> newUrls = extractLinks(content, site.getUrl());
+                }
+            } catch (Exception e) {
+                log.error("Ошибка при обработке страницы {}: {}", currentUrl, e.getMessage());
+                updateSiteStatusAndError(site, IndexStatus.FAILED, e.getMessage());
             }
         }
-//        while (!urlsToProcess.isEmpty() && currentDepth < MAX_DEPTH) {
-//            String currentUrl = urlsToProcess.poll();
-//
-//            try {
-//                if (!pageRepository.existsByPathAndSiteModel(currentUrl, site)) {
-//                    String content = fetchPageContent(currentUrl);
-//                    PageModel page = new PageModel();
-//                    page.setSiteModel(site);
-//                    page.setPath(getRelativePath(currentUrl, site.getUrl()));
-//                    page.setContent(content);
-//                    page.setCode(getResponseCode(currentUrl));
-//
-//                    try {
-//                        pageRepository.save(page);
-//                        updateSiteStatusTime(site);
-//
-//                        List<String> newUrls = extractLinks(content, site.getUrl());
-//                        urlsToProcess.addAll(newUrls);
-//                    } catch (DataIntegrityViolationException e) {
-//                        log.warn("Страница {} уже существует в базе данных", currentUrl);
-//                    }
-//                }
-//            } catch (Exception e) {
-//                log.error("Ошибка при обработке страницы {}: {}", currentUrl, e.getMessage());
-//                updateSiteStatusAndError(site, IndexStatus.FAILED, e.getMessage());
-//            }
-//        }
     }
-
-    private boolean isUrlPartOfSite(String url, String siteUrl)
-
 
     private String fetchPageContent(String url) {
         HttpRequest request = HttpRequest.newBuilder()
