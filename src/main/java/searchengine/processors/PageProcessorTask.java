@@ -23,8 +23,8 @@ import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.RecursiveAction;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-@RequiredArgsConstructor
 @Slf4j
 public class PageProcessorTask extends RecursiveAction {
 
@@ -34,59 +34,112 @@ public class PageProcessorTask extends RecursiveAction {
     private final PageRepository pageRepository;
     private final SiteRepository siteRepository;
     private final CrawlerSettings crawlerSettings;
+    private final AtomicBoolean isIndexingRunning;
     private static final int THRESHOLD = 100;
     private static final int MAX_DEPTH = 5;
     private int currentDepth = 0;
 
+    public PageProcessorTask(Queue<String> urlsToProcess, SiteModel site, HttpClient httpClient, PageRepository pageRepository, SiteRepository siteRepository, CrawlerSettings crawlerSettings, AtomicBoolean isIndexingRunning) {
+        this.urlsToProcess = urlsToProcess;
+        this.site = site;
+        this.httpClient = httpClient;
+        this.pageRepository = pageRepository;
+        this.siteRepository = siteRepository;
+        this.crawlerSettings = crawlerSettings;
+        this.isIndexingRunning = isIndexingRunning;
+    }
 
     @Override
     protected void compute() {
-        if (urlsToProcess.size() <= THRESHOLD) {
+        if (!isIndexingRunning.get()) {
+            log.info("Индексация остановлена, завершаем задачу для сайта {}", site.getUrl());
+            return;
+        }
+
+        if (urlsToProcess.size() <= THRESHOLD || currentDepth >= MAX_DEPTH) {
             processSequentially();
             return;
         }
 
-        // Разделяем задачу пополам
+        // Разделяем очередь на две части
         Queue<String> halfUrls = new LinkedList<>();
-        int count = urlsToProcess.size() /2;
+        int count = urlsToProcess.size() / 2;
         for (int i = 0; i < count && !urlsToProcess.isEmpty(); i++) {
             halfUrls.add(urlsToProcess.poll());
         }
 
         // Создаем подзадачи
-        PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings);
-        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings);
+        PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning);
+        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning);
 
         // Запускаем параллельно
         task1.fork();
         task2.compute();
         task1.join();
 
-        return;
-
     }
 
     private void processSequentially() {
-        while (!urlsToProcess.isEmpty() && currentDepth < MAX_DEPTH) {
+        while (!urlsToProcess.isEmpty() && currentDepth < MAX_DEPTH && isIndexingRunning.get()) {
             String currentUrl = urlsToProcess.poll();
 
+            if (currentUrl == null || currentUrl.isEmpty()) {
+                continue;
+            }
+
             try {
-                if (!pageRepository.existsByPathAndSiteModel(currentUrl, site)) {
-                    String content = fetchPageContent(currentUrl);
+                String relativePath = getRelativePath(currentUrl, site.getUrl());
+
+                // Проверяем, существует ли страница в базе данных
+                if (!pageRepository.existsByPathAndSiteModel(getRelativePath(currentUrl, site.getUrl()), site)) {
+                    // Получаем содержимое страницы с задержкой для аккуратного обхода
+                    String content = fetchPageContentWithDelay(currentUrl);
+
+                    // Создаем новую страницу
                     PageModel page = new PageModel();
                     page.setSiteModel(site);
                     page.setPath(getRelativePath(currentUrl, site.getUrl()));
                     page.setContent(content);
                     page.setCode(getResponseCode(currentUrl));
 
-                    // Извлекаем новые ссылки и добавляем в очередь
-                    List<String> newUrls = extractLinks(content, site.getUrl());
+                    try {
+                        // Сохраняем страницу
+                        pageRepository.save(page);
+                        updateSiteStatusTime(site);
+
+                        // Извлекаем новые ссылки и добавляем в очередь
+                        List<String> newUrls = extractLinks(content, site.getUrl());
+                        // Проверяем каждую новую ссылку перед добавлением
+                        for (String newUrl : newUrls) {
+                            String newRelativePath = getRelativePath(newUrl, site.getUrl());
+                            if (!urlsToProcess.contains(newUrls)
+                                    && !pageRepository.existsByPathAndSiteModel(newRelativePath, site)
+                                    && isUrlFromSameSite(newUrl, site.getUrl())) {
+                                urlsToProcess.add(newUrl);
+                            }
+                        }
+
+                    } catch (DataIntegrityViolationException e) {
+                        log.warn("Страница {} уже существует в базе данных", currentUrl);
+                    }
                 }
             } catch (Exception e) {
                 log.error("Ошибка при обработке страницы {}: {}", currentUrl, e.getMessage());
                 updateSiteStatusAndError(site, IndexStatus.FAILED, e.getMessage());
             }
         }
+    }
+
+    private String fetchPageContentWithDelay(String url) {
+        // Задержка от 500 до 5000 мс случайным образом
+        try {
+            long delay = 500 + (long)(Math.random() * 4500);
+            Thread.sleep(delay);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Поток был прерван");
+        }
+        return fetchPageContent(url);
     }
 
     private String fetchPageContent(String url) {
@@ -105,7 +158,10 @@ public class PageProcessorTask extends RecursiveAction {
 
             if (response.statusCode() == 301 || response.statusCode() == 302) {
                 String location = response.headers().firstValue("Location").orElse("");
-                return fetchPageContent(location); // Рекурсивный вызов для обработки редиректа
+                if (!location.isEmpty()) {
+                    return fetchPageContent(location);
+                }
+                throw new RuntimeException("Редирект без Location");
             }
 
             if (response.statusCode() != 200) {
@@ -120,11 +176,39 @@ public class PageProcessorTask extends RecursiveAction {
 
     private String getRelativePath(String absoluteUrl, String baseUrl) {
         try {
+            URI baseUri = new URI(baseUrl.endsWith("/") ? baseUrl : baseUrl + "/");
             URI absoluteUri = new URI(absoluteUrl);
-            URI baseUri = new URI(baseUrl);
-            return absoluteUri.relativize(baseUri).getPath();
+
+            if (!absoluteUri.getHost().equalsIgnoreCase(baseUri.getHost())) {
+                // Если URL не с того же сайта — возвращаем null или пустую строку
+                return null;
+            }
+
+            String basePath = baseUri.getPath();
+            String adsPath = absoluteUri.getPath();
+
+            if (adsPath.startsWith(basePath)) {
+                return adsPath.substring(basePath.length() - 1);
+            } else {
+                return adsPath;
+            }
         } catch (URISyntaxException e) {
             throw new RuntimeException("Ошибка при обработке URL: " + e.getMessage());
+        }
+    }
+
+    private boolean isUrlFromSameSite(String url, String baseUrl) {
+        try {
+            URI uri  = new URI(url);
+            URI baseUri = new URI(baseUrl);
+            // Проверяем, что оба URL имеют хост
+            if (uri.getHost() == null || baseUri.getHost() == null) {
+                return false;
+            }
+            return uri.getHost().equalsIgnoreCase(baseUri.getHost());
+        } catch (URISyntaxException e) {
+            log.warn("Некорректный URL при проверке сайта: {}", url);
+            return false;
         }
     }
 
@@ -139,20 +223,25 @@ public class PageProcessorTask extends RecursiveAction {
         List<String> urls = new ArrayList<>();
 
         for (Element link : links) {
-            String href = links.attr("href");
-            if (!href.isEmpty()) {
-                try {
-                    URI uri = new URI(href);
-                    if (uri.isAbsolute()) {
+            String href = link.attr("href");
+            if (href == null || href.isEmpty()) continue;
+
+            try {
+                URI uri = new URI(href);
+                if (uri.isAbsolute()) {
+                    if (isUrlFromSameSite(href, baseUrl)) {
                         urls.add(href);
-                    } else {
-                        urls.add(baseUrl + href);
                     }
-                } catch (URISyntaxException e) {
-                    log.warn("Некорректный URL: {}", href);
+                } else {
+                    // Обрабатываем относительные ссылки
+                    String fullUrl = baseUrl.endsWith("/") ? baseUrl + href : baseUrl + "/" + href;
+                    urls.add(fullUrl);
                 }
+            } catch (URISyntaxException e) {
+                log.warn("Некорректный URL: {}", href);
             }
         }
+
         return urls;
     }
 
@@ -175,6 +264,7 @@ public class PageProcessorTask extends RecursiveAction {
             return response.statusCode();
         } catch (IOException | InterruptedException e) {
             log.warn("Не удалось получить код ответа для URL {}: {}", url, e.getMessage());
+            Thread.currentThread().interrupt();
             return 0; // или выберите другое значение по умолчанию
         }
     }

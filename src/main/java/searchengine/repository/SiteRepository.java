@@ -5,9 +5,11 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import searchengine.model.SiteModel;
 import searchengine.model.enums.IndexStatus;
 
+import javax.transaction.Transactional;
 import java.util.List;
 import java.util.Optional;
 
+@Transactional
 public interface SiteRepository extends JpaRepository<SiteModel, Integer> {
 
     Optional<SiteModel> findByUrl(String url);

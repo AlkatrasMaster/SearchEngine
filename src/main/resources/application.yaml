@@ -20,16 +20,10 @@ indexing-settings:
   sites:
 #    - url: https://www.lenta.ru
 #      name: Лента.ру
-    - url: https://www.skillbox.ru
-      name: Skillbox
-#    - url: https://www.playback.ru
-#      name: PlayBack.Ru
-
-  logging:
-    level:
-      org.hibernate.SQL: DEBUG
-      org.hibernate.type: TRACE
-      searchengine: DEBUG
+#    - url: https://www.skillbox.ru
+#      name: Skillbox
+    - url: https://www.playback.ru
+      name: PlayBack.Ru
 
 
 crawler-setting:

@@ -19,7 +19,7 @@ import java.net.http.HttpClient;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.stream.Collectors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 @Slf4j
@@ -27,10 +27,10 @@ public class IndexingServiceImpl implements IndexingService{
 
     private final SiteRepository siteRepository;
     private final PageRepository pageRepository;
-    private volatile boolean isIndexingRunning = false;
     private final HttpClient httpClient;
     private final CrawlerSettings crawlerSettings;
     private final SitesList sitesList;
+    private final AtomicBoolean isIndexingRunning = new AtomicBoolean(false);
 
 
     public IndexingServiceImpl(SiteRepository siteRepository, PageRepository pageRepository, CrawlerSettings crawlerSettings, SitesList sitesList) {
@@ -43,69 +43,61 @@ public class IndexingServiceImpl implements IndexingService{
 
     @Override
     public boolean isIndexingRunning() {
-        return this.isIndexingRunning;
+        return isIndexingRunning.get();
     }
 
     @Override
+    @Transactional
     public void startIndexing() throws InterruptedException {
-        if (isIndexingRunning) {
+        if (isIndexingRunning.get()) {
             throw new IndexingAlreadyRunningException("Индексация уже запущена");
         }
 
-        isIndexingRunning = true;
-        log.info("Начало процесса индексации сайтов");
+        isIndexingRunning.set(true);
+        log.info("Начало индексации...");
 
         try {
-            // Получаем список сайтов из конфигурации
             List<Site> configSites = sitesList.getSites();
-            List<Thread> indexingThreads = new ArrayList<>();
+            List<Thread> threads = new ArrayList<>();
 
-            // Создаем и запускаем поток для каждого сайта из конфигурации
             for (Site configSite : configSites) {
                 Thread thread = new Thread(() -> {
-                    SiteModel existingSite = null;
+                    SiteModel siteModel = null;
                     try {
-                        // Проверяем, есть ли сайт в базе данных
-                        existingSite = siteRepository.findByUrl(configSite.getUrl())
-                                .orElseGet(() -> {
-                                    SiteModel newSite = new SiteModel();
-                                    newSite.setUrl(configSite.getUrl());
-                                    newSite.setName(configSite.getName());
-                                    return siteRepository.save(newSite);
-                                });
-                        processSite(existingSite);
-                    } catch (Exception e) {
-                        log.error("Ошибка при обработке сайта {}: {}",
-                                configSite.getUrl(), e.getMessage());
-                        updateSiteStatusAndError(existingSite, IndexStatus.FAILED,
-                                e.getMessage());
-                    }
+                        siteRepository.deleteByUrl(configSite.getUrl());
+                        pageRepository.deleteBySiteModelUrl(configSite.getUrl());
 
+                        siteModel = new SiteModel();
+                        siteModel.setUrl(configSite.getUrl());
+                        siteModel.setName(configSite.getName());
+                        siteModel.setStatus(IndexStatus.INDEXING);
+                        siteModel.setStatusTime(LocalDateTime.now());
+                        siteRepository.save(siteModel);
+
+                        processPages(siteModel);
+
+                        updateSiteStatus(siteModel, IndexStatus.INDEXED);
+
+                    } catch (Exception e) {
+                        log.error("Ошибка при обработке сайта {}: {}", configSite.getUrl(), e.getMessage());
+                        if (siteModel != null) {
+                            updateSiteStatusAndError(siteModel, IndexStatus.FAILED, e.getMessage());
+                        }
+                    }
                 });
                 thread.setName("IndexingThread-" + configSite.getName());
                 thread.start();
-                indexingThreads.add(thread);
+                threads.add(thread);
             }
 
-            // Проверяем статус потоков каждые 5 секунд
-            while (hasActiveThread(indexingThreads)) {
-                Thread.sleep(5000);
-                log.info("Индексация продолжается...");
+            // Ждем завершения всех потоков
+            for (Thread t : threads) {
+                t.join();
             }
 
-            // После завершения индексации обновляем статус всех сайтов на INDEXED
-            List<SiteModel> indexedSites = siteRepository.findByStatus(IndexStatus.INDEXING);
-            for (SiteModel site : indexedSites) {
-                updateSiteStatus(site, IndexStatus.INDEXED);
-            }
-
-
-            log.info("Процесс индексации завершен успешно");
-        } catch (Exception e) {
-            log.error("Ошибка при индексации сайтов", e);
-            throw e;
+            log.info("Индексация завершена.");
         } finally {
-            isIndexingRunning = false;
+            isIndexingRunning.set(false);
         }
     }
 
@@ -117,31 +109,22 @@ public class IndexingServiceImpl implements IndexingService{
 
     @Transactional
     public Map<String, Object> stopIndexing() {
-        if (!isIndexingRunning) {
+        if (!isIndexingRunning.get()) {
             return Map.of(
                     "result", false,
                     "error", "Индексация не запущена"
             );
         }
 
-        log.info("Запрошена остановка процесса индексации");
-
-        // Останавливаем все потоки
-        isIndexingRunning = false;
+        log.info("Остановка индексации...");
+        isIndexingRunning.set(false);
 
         // Получаем список сайтов, которые находятся в процессе индексации
         List<SiteModel> indexingSites = siteRepository.findByStatus(IndexStatus.INDEXED);
 
-        // Обновляем статус всех сайтов в процессе индексации
-        for (SiteModel site : indexingSites) {
-            updateSiteStatusAndError(
-                    site,
-                    IndexStatus.FAILED,
-                    "Индексация остановлена пользователем"
-            );
-        }
         return Map.of("result", true);
     }
+
 
 
     private void processSite(SiteModel site) {
@@ -171,19 +154,27 @@ public class IndexingServiceImpl implements IndexingService{
             {
                 updateSiteStatusAndError(newSite, IndexStatus.FAILED, e.getMessage());
             }
-            throw e;
         }
-
     }
 
-    private void processPages(SiteModel site) {
-        Queue<String> urlsToProcess = new LinkedList<>();
-        urlsToProcess.add(site.getUrl());
+
+    private void processPages(SiteModel siteModel) {
+        // Используем потокобезопасную очередь
+        Queue<String> urlQueue = new ConcurrentLinkedDeque<>();
+        urlQueue.add(siteModel.getUrl());
 
         ForkJoinPool pool = new ForkJoinPool();
-        pool.invoke(new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings));
+
+        // Создаем задачу с начальной глубиной 0
+        PageProcessorTask task = new PageProcessorTask(urlQueue, siteModel, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning);
+
+        pool.invoke(task);
     }
 
+    public void updateSiteStatusTime(SiteModel site) {
+        site.setStatusTime(LocalDateTime.now());
+        siteRepository.save(site);
+    }
 
 
     private void updateSiteStatus(SiteModel site, IndexStatus status) {

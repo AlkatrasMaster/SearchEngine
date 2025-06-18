@@ -23,7 +23,7 @@ public class PageModel {
     @JoinColumn(name = "site_id", nullable = false)
     private SiteModel siteModel;
 
-    @Column(name = "path", columnDefinition = "VARCHAR(255)")
+    @Column(name = "path", columnDefinition = "VARCHAR(255)", nullable = false)
     private String path;
 
     @Column(nullable = false)

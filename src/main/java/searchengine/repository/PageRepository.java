@@ -9,6 +9,7 @@ import searchengine.model.SiteModel;
 import javax.transaction.Transactional;
 import java.util.List;
 
+@Transactional
 public interface PageRepository extends JpaRepository<PageModel, Integer> {
 
     List<PageModel> findBySiteModelId(Integer siteId);
