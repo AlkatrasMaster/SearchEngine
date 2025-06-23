@@ -1,5 +1,6 @@
 package searchengine.controllers;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -11,8 +12,10 @@ import searchengine.services.StatisticsService;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 @RestController
+@Slf4j
 @RequestMapping("/api")
 public class ApiController {
 
@@ -40,34 +43,47 @@ public class ApiController {
                 return ResponseEntity.badRequest().body(response);
             }
 
-            // Запускаем процесс индексации
-            indexingService.startIndexing();
+            // Запускаем индексацию в отдельном потоке
+            CompletableFuture.runAsync(() -> {
+                try {
+                    indexingService.startIndexing();
+                } catch (Exception e) {
+                    log.error("Ошибка при запуске индексации: " + e.getMessage());
+                }
+            });
 
-            // Создаем успешный ответ
-            Map<String, Object> responce = new HashMap<>();
-            responce.put("result", true);
-            return ResponseEntity.ok(responce);
+            // Немедленно возвращаем успешный ответ
+            Map<String, Object> response = new HashMap<>();
+            response.put("result", true);
+            return ResponseEntity.ok(response);
         } catch (Exception e) {
             // Обработка других исключений
-            Map<String, Object> responce = new HashMap<>();
-            responce.put("result", false);
-            responce.put("error", "Произошла ошибка при запуске индексации: " + e.getMessage());
-            return ResponseEntity.badRequest().body(responce);
+            Map<String, Object> response = new HashMap<>();
+            response.put("result", false);
+            response.put("error", "Произошла ошибка при запуске индексации: " + e.getMessage());
+            return ResponseEntity.badRequest().body(response);
         }
     }
 
-//    @GetMapping("/stopIndexing")
-//    public ResponseEntity<Map<String, Object>> stopIndexing() {
-//        try {
-//            Map<String, Object> responce = indexingServiceImpl.stopIndexing();
-//            return ResponseEntity.ok(responce);
-//        } catch (Exception e) {
-//            Map<String, Object> responce = new HashMap<>();
-//            responce.put("result", false);
-//            responce.put("error", e.getMessage());
-//            return ResponseEntity.badRequest().body(responce);
-//        }
-//
-//    }
+    @GetMapping("/stopIndexing")
+    public ResponseEntity<Map<String, Object>> stopIndexing() {
+        try {
+            if (!indexingService.isIndexingRunning()) {
+                Map<String, Object> response = new HashMap<>();
+                response.put("result", false);
+                response.put("error", "Индексация не запущена");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            Map<String, Object> response = indexingService.stopIndexing();
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("result", false);
+            response.put("error", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+
+    }
 
 }

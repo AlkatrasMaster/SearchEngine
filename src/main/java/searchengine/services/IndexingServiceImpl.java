@@ -7,6 +7,7 @@ import searchengine.config.CrawlerSettings;
 import searchengine.config.Site;
 import searchengine.config.SitesList;
 import searchengine.exceptions.IndexingAlreadyRunningException;
+import searchengine.exceptions.IndexingException;
 import searchengine.model.SiteModel;
 import searchengine.model.enums.IndexStatus;
 import searchengine.processors.PageProcessorTask;
@@ -102,11 +103,13 @@ public class IndexingServiceImpl implements IndexingService{
     }
 
 
+
     private boolean hasActiveThread(List<Thread> threads) {
         return threads.stream()
                 .anyMatch(thread -> thread.isAlive());
     }
 
+    @Override
     @Transactional
     public Map<String, Object> stopIndexing() {
         if (!isIndexingRunning.get()) {
@@ -122,42 +125,49 @@ public class IndexingServiceImpl implements IndexingService{
         // Получаем список сайтов, которые находятся в процессе индексации
         List<SiteModel> indexingSites = siteRepository.findByStatus(IndexStatus.INDEXED);
 
+        // Обновляем статус всех сайтов в процессе индексации
+        for (SiteModel site : indexingSites) {
+            updateSiteStatusAndError(site, IndexStatus.FAILED, "Индексация остановлена пользователем");
+        }
+
         return Map.of("result", true);
     }
 
 
 
-    private void processSite(SiteModel site) {
-        SiteModel newSite = null;
-        try {
-            // Удаляем существующие страницы сайта
-            siteRepository.deleteByUrl(site.getUrl());
-            pageRepository.deleteBySiteModelUrl(site.getUrl());
+//    private void processSite(SiteModel site) {
+//        SiteModel newSite = null;
+//        try {
+//            // Удаляем существующие страницы сайта
+//            siteRepository.deleteByUrl(site.getUrl());
+//            pageRepository.deleteBySiteModelUrl(site.getUrl());
+//
+//            // Создаем новую запись сайта со статусом INDEXING
+//            newSite = new SiteModel();
+//            newSite.setUrl(site.getUrl());
+//            newSite.setName(site.getName());
+//            newSite.setStatus(IndexStatus.INDEXED);
+//            newSite.setStatusTime(LocalDateTime.now());
+//
+//            siteRepository.save(newSite);
+//
+//            // Обходим все страницы сайта
+//            processPages(newSite);
+//
+//            // Обновляем статус на INDEXED
+//            updateSiteStatus(newSite, IndexStatus.INDEXING);
+//        } catch (Exception e) {
+//            log.error("Ошибка при обработке сайта: {}, сообщение: {}", site.getUrl(), e.getMessage());
+//            if (newSite != null)
+//            {
+//                updateSiteStatusAndError(newSite, IndexStatus.FAILED, e.getMessage());
+//            }
+//        }
+//    }
 
-            // Создаем новую запись сайта со статусом INDEXING
-            newSite = new SiteModel();
-            newSite.setUrl(site.getUrl());
-            newSite.setName(site.getName());
-            newSite.setStatus(IndexStatus.INDEXED);
-            newSite.setStatusTime(LocalDateTime.now());
-
-            siteRepository.save(newSite);
-
-            // Обходим все страницы сайта
-            processPages(newSite);
-
-            // Обновляем статус на INDEXED
-            updateSiteStatus(newSite, IndexStatus.INDEXING);
-        } catch (Exception e) {
-            log.error("Ошибка при обработке сайта: {}, сообщение: {}", site.getUrl(), e.getMessage());
-            if (newSite != null)
-            {
-                updateSiteStatusAndError(newSite, IndexStatus.FAILED, e.getMessage());
-            }
-        }
-    }
 
 
+    @Transactional
     private void processPages(SiteModel siteModel) {
         // Используем потокобезопасную очередь
         Queue<String> urlQueue = new ConcurrentLinkedDeque<>();
@@ -189,5 +199,6 @@ public class IndexingServiceImpl implements IndexingService{
         site.setStatusTime(LocalDateTime.now());
         siteRepository.save(site);
     }
+
 
 }

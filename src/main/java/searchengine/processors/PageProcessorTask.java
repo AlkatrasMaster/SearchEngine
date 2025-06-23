@@ -88,6 +88,16 @@ public class PageProcessorTask extends RecursiveAction {
             }
 
             try {
+                URI uri = new URI(currentUrl);
+                String path = uri.getPath().toLowerCase();
+
+                // Пропускаем URL изображений
+                if (path.endsWith(".jpg") || path.endsWith(".jpeg") ||
+                        path.endsWith(".png") || path.endsWith(".gif") ||
+                        path.endsWith(".webp") || path.endsWith(".bmp")) {
+                    continue;
+                }
+
                 String relativePath = getRelativePath(currentUrl, site.getUrl());
 
                 // Проверяем, существует ли страница в базе данных
@@ -224,7 +234,9 @@ public class PageProcessorTask extends RecursiveAction {
 
         for (Element link : links) {
             String href = link.attr("href");
-            if (href == null || href.isEmpty()) continue;
+            if (href == null || href.isEmpty()) {
+                continue;
+            }
 
             try {
                 URI uri = new URI(href);
@@ -268,5 +280,4 @@ public class PageProcessorTask extends RecursiveAction {
             return 0; // или выберите другое значение по умолчанию
         }
     }
-
 }
