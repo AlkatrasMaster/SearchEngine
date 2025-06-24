@@ -78,6 +78,7 @@ public class IndexingServiceImpl implements IndexingService{
                         processPages(siteModel);
 
                         updateSiteStatus(siteModel, IndexStatus.INDEXED);
+                        log.info("Индексация завершена для {}", configSite.getUrl());
 
                     } catch (Exception e) {
                         log.error("Ошибка при обработке сайта {}: {}", configSite.getUrl(), e.getMessage());
@@ -135,48 +136,19 @@ public class IndexingServiceImpl implements IndexingService{
 
 
 
-//    private void processSite(SiteModel site) {
-//        SiteModel newSite = null;
-//        try {
-//            // Удаляем существующие страницы сайта
-//            siteRepository.deleteByUrl(site.getUrl());
-//            pageRepository.deleteBySiteModelUrl(site.getUrl());
-//
-//            // Создаем новую запись сайта со статусом INDEXING
-//            newSite = new SiteModel();
-//            newSite.setUrl(site.getUrl());
-//            newSite.setName(site.getName());
-//            newSite.setStatus(IndexStatus.INDEXED);
-//            newSite.setStatusTime(LocalDateTime.now());
-//
-//            siteRepository.save(newSite);
-//
-//            // Обходим все страницы сайта
-//            processPages(newSite);
-//
-//            // Обновляем статус на INDEXED
-//            updateSiteStatus(newSite, IndexStatus.INDEXING);
-//        } catch (Exception e) {
-//            log.error("Ошибка при обработке сайта: {}, сообщение: {}", site.getUrl(), e.getMessage());
-//            if (newSite != null)
-//            {
-//                updateSiteStatusAndError(newSite, IndexStatus.FAILED, e.getMessage());
-//            }
-//        }
-//    }
-
 
 
     @Transactional
     private void processPages(SiteModel siteModel) {
         // Используем потокобезопасную очередь
-        Queue<String> urlQueue = new ConcurrentLinkedDeque<>();
+        ConcurrentLinkedDeque<String> urlQueue = new ConcurrentLinkedDeque<>();
         urlQueue.add(siteModel.getUrl());
 
         ForkJoinPool pool = new ForkJoinPool();
 
+        // 1 замечание исправлено. Исправлена проблема с инкрементацией currentDepth.
         // Создаем задачу с начальной глубиной 0
-        PageProcessorTask task = new PageProcessorTask(urlQueue, siteModel, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning);
+        PageProcessorTask task = new PageProcessorTask(urlQueue, siteModel, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, 0);
 
         pool.invoke(task);
     }

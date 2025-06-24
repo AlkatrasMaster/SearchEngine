@@ -22,6 +22,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.RecursiveAction;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -37,9 +38,11 @@ public class PageProcessorTask extends RecursiveAction {
     private final AtomicBoolean isIndexingRunning;
     private static final int THRESHOLD = 100;
     private static final int MAX_DEPTH = 5;
-    private int currentDepth = 0;
 
-    public PageProcessorTask(Queue<String> urlsToProcess, SiteModel site, HttpClient httpClient, PageRepository pageRepository, SiteRepository siteRepository, CrawlerSettings crawlerSettings, AtomicBoolean isIndexingRunning) {
+    // 1 замечание исправлено. Исправлена проблема с инкрементацией currentDepth.
+    private int currentDepth;
+
+    public PageProcessorTask(Queue<String> urlsToProcess, SiteModel site, HttpClient httpClient, PageRepository pageRepository, SiteRepository siteRepository, CrawlerSettings crawlerSettings, AtomicBoolean isIndexingRunning, int currentDepth) {
         this.urlsToProcess = urlsToProcess;
         this.site = site;
         this.httpClient = httpClient;
@@ -47,6 +50,7 @@ public class PageProcessorTask extends RecursiveAction {
         this.siteRepository = siteRepository;
         this.crawlerSettings = crawlerSettings;
         this.isIndexingRunning = isIndexingRunning;
+        this.currentDepth = currentDepth;
     }
 
     @Override
@@ -62,15 +66,20 @@ public class PageProcessorTask extends RecursiveAction {
         }
 
         // Разделяем очередь на две части
-        Queue<String> halfUrls = new LinkedList<>();
+        //
+        ConcurrentLinkedDeque<String> halfUrls = new ConcurrentLinkedDeque<>();
         int count = urlsToProcess.size() / 2;
         for (int i = 0; i < count && !urlsToProcess.isEmpty(); i++) {
-            halfUrls.add(urlsToProcess.poll());
+            String url = urlsToProcess.poll();
+            if (url != null) {
+                halfUrls.add(url);
+            }
         }
 
+        // 1 замечание исправлено. Исправлена проблема с инкрементацией currentDepth.
         // Создаем подзадачи
-        PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning);
-        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning);
+        PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, currentDepth + 1);
+        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, currentDepth + 1);
 
         // Запускаем параллельно
         task1.fork();
@@ -93,12 +102,15 @@ public class PageProcessorTask extends RecursiveAction {
 
                 // Пропускаем URL изображений
                 if (path.endsWith(".jpg") || path.endsWith(".jpeg") ||
-                        path.endsWith(".png") || path.endsWith(".gif") ||
-                        path.endsWith(".webp") || path.endsWith(".bmp")) {
+                    path.endsWith(".png") || path.endsWith(".gif") ||
+                    path.endsWith(".webp") || path.endsWith(".bmp")) {
                     continue;
                 }
 
                 String relativePath = getRelativePath(currentUrl, site.getUrl());
+                if (relativePath == null) {
+                    continue;
+                }
 
                 // Проверяем, существует ли страница в базе данных
                 if (!pageRepository.existsByPathAndSiteModel(getRelativePath(currentUrl, site.getUrl()), site)) {
@@ -119,14 +131,29 @@ public class PageProcessorTask extends RecursiveAction {
 
                         // Извлекаем новые ссылки и добавляем в очередь
                         List<String> newUrls = extractLinks(content, site.getUrl());
+                        // 2 замечание исправлено связанное с ошибкой в проверке при добавлении новых ссылок
+                        // 3 замечание исправлено связанное с тем что getRelativePath может вернуть null
                         // Проверяем каждую новую ссылку перед добавлением
                         for (String newUrl : newUrls) {
                             String newRelativePath = getRelativePath(newUrl, site.getUrl());
-                            if (!urlsToProcess.contains(newUrls)
-                                    && !pageRepository.existsByPathAndSiteModel(newRelativePath, site)
-                                    && isUrlFromSameSite(newUrl, site.getUrl())) {
+
+                            if (newRelativePath == null &&
+                                !urlsToProcess.contains(newUrl) &&
+                                !pageRepository.existsByPathAndSiteModel(newRelativePath, site) &&
+                                isUrlFromSameSite(newUrl, site.getUrl())) {
                                 urlsToProcess.add(newUrl);
                             }
+                        }
+
+                        if (!newUrls.isEmpty() && currentDepth + 1 < MAX_DEPTH) {
+                            PageProcessorTask subTask = new PageProcessorTask(
+                                    new ConcurrentLinkedDeque<>(newUrls),
+                                    site, httpClient, pageRepository, siteRepository,
+                                    crawlerSettings, isIndexingRunning,
+                                    currentDepth + 1
+                            );
+                            subTask.fork();
+                            subTask.join();
                         }
 
                     } catch (DataIntegrityViolationException e) {
@@ -189,7 +216,7 @@ public class PageProcessorTask extends RecursiveAction {
             URI baseUri = new URI(baseUrl.endsWith("/") ? baseUrl : baseUrl + "/");
             URI absoluteUri = new URI(absoluteUrl);
 
-            if (!absoluteUri.getHost().equalsIgnoreCase(baseUri.getHost())) {
+            if (!Objects.equals(baseUri.getHost(), absoluteUri.getHost())) {
                 // Если URL не с того же сайта — возвращаем null или пустую строку
                 return null;
             }
@@ -211,11 +238,8 @@ public class PageProcessorTask extends RecursiveAction {
         try {
             URI uri  = new URI(url);
             URI baseUri = new URI(baseUrl);
-            // Проверяем, что оба URL имеют хост
-            if (uri.getHost() == null || baseUri.getHost() == null) {
-                return false;
-            }
-            return uri.getHost().equalsIgnoreCase(baseUri.getHost());
+
+            return Objects.equals(uri.getHost(), baseUri.getHost());
         } catch (URISyntaxException e) {
             log.warn("Некорректный URL при проверке сайта: {}", url);
             return false;
@@ -253,7 +277,6 @@ public class PageProcessorTask extends RecursiveAction {
                 log.warn("Некорректный URL: {}", href);
             }
         }
-
         return urls;
     }
 
