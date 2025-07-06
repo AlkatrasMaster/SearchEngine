@@ -16,5 +16,10 @@
       <option name="name" value="JBoss Community repository" />
       <option name="url" value="https://repository.jboss.org/nexus/content/repositories/public/" />
     </remote-repository>
+    <remote-repository>
+      <option name="id" value="skillbox-gitlab" />
+      <option name="name" value="skillbox-gitlab" />
+      <option name="url" value="https://gitlab.skillbox.ru/api/v4/projects/263574/packages/maven" />
+    </remote-repository>
   </component>
 </project>
