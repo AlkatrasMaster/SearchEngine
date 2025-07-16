@@ -224,11 +224,25 @@ public class PageProcessorTask extends RecursiveAction {
             String basePath = baseUri.getPath();
             String adsPath = absoluteUri.getPath();
 
-            if (adsPath.startsWith(basePath)) {
-                return adsPath.substring(basePath.length() - 1);
-            } else {
-                return adsPath;
+//            if (adsPath.startsWith(basePath)) {
+//                return adsPath.substring(basePath.length() - 1);
+//            } else {
+//                return adsPath;
+//            }
+            // Удаляем базовый путь, если он есть
+            String relativePath = adsPath.startsWith(basePath)
+                    ? adsPath.substring(basePath.length())
+                    : adsPath;
+
+            // Убедимся, что путь начинается с одного слэша и не содержит двойных
+            relativePath = "/" + relativePath;
+            relativePath = relativePath.replaceAll("/{2,}", "/");
+
+            // Специальный случай — главная страница
+            if (relativePath.equals("/")) {
+                return "/";
             }
+            return relativePath;
         } catch (URISyntaxException e) {
             throw new RuntimeException("Ошибка при обработке URL: " + e.getMessage());
         }

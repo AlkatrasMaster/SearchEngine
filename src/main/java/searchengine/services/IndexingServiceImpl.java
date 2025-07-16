@@ -2,12 +2,11 @@ package searchengine.services;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import searchengine.config.CrawlerSettings;
 import searchengine.config.Site;
 import searchengine.config.SitesList;
 import searchengine.exceptions.IndexingAlreadyRunningException;
-import searchengine.exceptions.IndexingException;
+import searchengine.model.PageModel;
 import searchengine.model.SiteModel;
 import searchengine.model.enums.IndexStatus;
 import searchengine.processors.PageProcessorTask;
@@ -16,7 +15,12 @@ import searchengine.repository.SiteRepository;
 
 
 import javax.transaction.Transactional;
+import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.*;
@@ -31,14 +35,16 @@ public class IndexingServiceImpl implements IndexingService{
     private final HttpClient httpClient;
     private final CrawlerSettings crawlerSettings;
     private final SitesList sitesList;
+    private final LemmaService lemmaService;
     private final AtomicBoolean isIndexingRunning = new AtomicBoolean(false);
 
 
-    public IndexingServiceImpl(SiteRepository siteRepository, PageRepository pageRepository, CrawlerSettings crawlerSettings, SitesList sitesList) {
+    public IndexingServiceImpl(SiteRepository siteRepository, PageRepository pageRepository, CrawlerSettings crawlerSettings, SitesList sitesList, LemmaService lemmaService) {
         this.siteRepository = siteRepository;
         this.pageRepository = pageRepository;
         this.crawlerSettings = crawlerSettings;
         this.sitesList = sitesList;
+        this.lemmaService = lemmaService;
         this.httpClient = HttpClient.newHttpClient();
     }
 
@@ -47,6 +53,8 @@ public class IndexingServiceImpl implements IndexingService{
         return isIndexingRunning.get();
     }
 
+
+    // Запуск индексации
     @Override
     @Transactional
     public void startIndexing() throws InterruptedException {
@@ -110,6 +118,8 @@ public class IndexingServiceImpl implements IndexingService{
                 .anyMatch(thread -> thread.isAlive());
     }
 
+
+    // Остановка индексации
     @Override
     @Transactional
     public Map<String, Object> stopIndexing() {
@@ -135,7 +145,62 @@ public class IndexingServiceImpl implements IndexingService{
     }
 
 
+    // Индексация одной веб-страницы
+    @Override
+    @Transactional
+    public void indexPage(String url) throws Exception {
+        // Проверяем, что URL принадлежит одному из сайтов из конфигурации
+        Optional<Site> optionalSiteConfig = sitesList.getSites().stream()
+                .filter(site -> url.startsWith(site.getUrl()))
+                .findFirst();
 
+        if (optionalSiteConfig.isEmpty()) {
+            throw new IllegalArgumentException("Данная страница находится за пределами сайтов, указанных в конфигурационном файле");
+        }
+
+        Site siteConfig = optionalSiteConfig.get();
+
+        // Ищем сайт в базе, либо создаём новую запись
+        SiteModel siteModel = siteRepository.findByUrl(siteConfig.getUrl())
+                .orElseGet(() -> {
+                    SiteModel newSite = new SiteModel();
+                    newSite.setUrl(siteConfig.getUrl());
+                    newSite.setName(siteConfig.getName());
+                    newSite.setStatus(IndexStatus.INDEXING);
+                    newSite.setStatusTime(LocalDateTime.now());
+                    return siteRepository.save(newSite);
+                });
+
+        String relativePath = getRelativePath(url, siteModel.getUrl());
+        if (relativePath == null) {
+            throw new IllegalArgumentException("Невозможно получить относительный путь страницы");
+        }
+
+        // Удаление старых лемм и индексов (если страница уже индексировалась)
+        Optional<PageModel> optionalOldPage = pageRepository.findByPathAndSiteModel(relativePath, siteModel);
+        optionalOldPage.ifPresent(lemmaService::removeLemmasAndIndexesForPage);
+
+        // Загружаем и сохраняем содержимое страницы
+        String content = fetchPageContentWithDelay(url);
+        int code = getResponseCode(url);
+
+        PageModel page = optionalOldPage.orElse(new PageModel());
+        page.setSiteModel(siteModel);
+        page.setPath(relativePath);
+        page.setContent(content);
+        page.setCode(code);
+
+        pageRepository.save(page);
+
+
+        // Обработка лемм и индексов
+        lemmaService.processPageContent(page);
+
+        // Обновление статуса сайта
+        updateSiteStatus(siteModel, IndexStatus.INDEXED);
+
+
+    }
 
 
     @Transactional
@@ -151,6 +216,21 @@ public class IndexingServiceImpl implements IndexingService{
         PageProcessorTask task = new PageProcessorTask(urlQueue, siteModel, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, 0);
 
         pool.invoke(task);
+    }
+    private int getResponseCode(String url) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody())
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            return response.statusCode();
+        } catch (IOException | InterruptedException e) {
+            log.warn("Не удалось получить код ответа для URL {}: {}", url, e.getMessage());
+            Thread.currentThread().interrupt();
+            return 0;
+        }
     }
 
     public void updateSiteStatusTime(SiteModel site) {
@@ -172,5 +252,73 @@ public class IndexingServiceImpl implements IndexingService{
         siteRepository.save(site);
     }
 
+    // Метод для вычисления относительного пути страницы
+    private String getRelativePath(String absoluteUrl, String baseUrl) {
+        try {
+            URI baseUri = new URI(baseUrl.endsWith("/") ? baseUrl : baseUrl + "/");
+            URI absoluteUri = new URI(absoluteUrl);
 
+            if (!Objects.equals(baseUri.getHost(), absoluteUri.getHost())) {
+                return null;
+            }
+
+            String basePath = baseUri.getPath();
+            String absPath = absoluteUri.getPath();
+
+            if (absPath.startsWith(basePath)) {
+                return absPath.substring(basePath.length() - 1);
+            } else {
+                return absPath;
+            }
+        } catch (URISyntaxException e) {
+            throw new RuntimeException("Ошибка при обработке URL: " + e.getMessage());
+        }
+    }
+
+    // Добавьте, если используете fetchPageContentWithDelay из PageProcessorTask,
+    // либо реализуйте соответствующий метод здесь
+    private String fetchPageContentWithDelay(String url) {
+        try {
+            long delay = 500 + (long) (Math.random() * 4500);
+            Thread.sleep(delay);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Поток был прерван");
+        }
+        return fetchPageContent(url);
+    }
+
+    // Новый метод
+    private String fetchPageContent(String url) {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .GET()
+                .header("User-Agent", Optional.ofNullable(crawlerSettings.getUserAgent())
+                        .orElse("Mozilla/5.0"))
+                .header("Referer", Optional.ofNullable(crawlerSettings.getReferrer())
+                        .orElse("https://www.google.com"))
+                .build();
+
+        try {
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == 301 || response.statusCode() == 302) {
+                String location = response.headers().firstValue("Location").orElse("");
+                if (!location.isEmpty()) {
+                    return fetchPageContent(location);
+                }
+                throw new RuntimeException("Редирект без Location");
+            }
+
+            if (response.statusCode() != 200) {
+                throw new RuntimeException("Ошибка при получении страницы: " + response.statusCode());
+            }
+
+            return response.body();
+        } catch (IOException | InterruptedException e) {
+            throw new RuntimeException("Ошибка при получении содержимого страницы: " + e.getMessage());
+        }
+    }
 }
+
+

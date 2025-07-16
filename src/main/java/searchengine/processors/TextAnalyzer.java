@@ -3,6 +3,7 @@ package searchengine.processors;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.lucene.morphology.LuceneMorphology;
 import org.apache.lucene.morphology.russian.RussianLuceneMorphology;
+import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -10,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+@Component
 @Slf4j
 public class TextAnalyzer {
     private final LuceneMorphology luceneMorphology;

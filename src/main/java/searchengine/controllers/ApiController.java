@@ -2,9 +2,7 @@ package searchengine.controllers;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import searchengine.dto.statistics.StatisticsResponse;
 import searchengine.services.IndexingService;
 import searchengine.services.IndexingServiceImpl;
@@ -63,6 +61,37 @@ public class ApiController {
             response.put("error", "Произошла ошибка при запуске индексации: " + e.getMessage());
             return ResponseEntity.badRequest().body(response);
         }
+    }
+
+    @PostMapping("/indexPage")
+    public ResponseEntity<Map<String, Object>> indexPage(@RequestParam("url") String url) {
+        Map<String, Object> response = new HashMap<>();
+
+        if (url == null || url.trim().isEmpty()) {
+            response.put("result", false);
+            response.put("error", "Адрес страницы не может быть пустым");
+            return ResponseEntity.badRequest().body(response);
+        }
+
+        try {
+            indexingService.indexPage(url);
+
+            response.put("result", true);
+            return ResponseEntity.ok(response);
+
+        } catch (IllegalArgumentException e) {
+            response.put("result", false);
+            response.put("error", "Данная страница находится за пределами сайтов, указанных в конфигурационном файле");
+            return ResponseEntity.badRequest().body(response);
+
+        } catch (Exception e) {
+            log.error("Ошибка при индексации страницы: {}", e.getMessage());
+            response.put("result", false);
+            response.put("error", "Произошла ошибка при индексации страницы");
+            return ResponseEntity.badRequest().body(response);
+        }
+
+
     }
 
     @GetMapping("/stopIndexing")

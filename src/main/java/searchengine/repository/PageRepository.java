@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import searchengine.config.Site;
 import searchengine.model.PageModel;
 import searchengine.model.SiteModel;
 
@@ -22,6 +23,8 @@ public interface PageRepository extends JpaRepository<PageModel, Integer> {
     PageModel findByPathAndSiteModelId(String path, Integer siteModelId);
 
     boolean existsByPathAndSiteModel(String url, SiteModel siteModel);
+
+    Optional<PageModel> findByPathAndSiteModel(String path, SiteModel siteModel);
 
 
 

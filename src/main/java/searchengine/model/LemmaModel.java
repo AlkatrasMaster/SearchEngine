@@ -12,7 +12,7 @@ import java.util.List;
 @Table(name = "lemma")
 public class LemmaModel {
 
-    @ManyToOne
+    @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Integer id;
 
