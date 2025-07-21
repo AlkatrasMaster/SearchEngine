@@ -72,17 +72,15 @@ public class LemmaServiceImpl implements LemmaService{
 
         for (IndexModel index : indexModels) {
             LemmaModel lemma = index.getLemma();
-            int updatedFrequency = lemma.getFrequency() - 1;
+            lemma.setFrequency(lemma.getFrequency() - 1);
 
-            if (updatedFrequency <= 0) {
+            if (lemma.getFrequency() <= 0) {
                 lemmaRepository.delete(lemma);
             } else {
-                lemma.setFrequency(updatedFrequency);
                 lemmaRepository.save(lemma);
             }
         }
 
         indexRepository.deleteAllByPage(page);
-
     }
 }

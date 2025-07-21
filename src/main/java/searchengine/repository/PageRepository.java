@@ -26,6 +26,12 @@ public interface PageRepository extends JpaRepository<PageModel, Integer> {
 
     Optional<PageModel> findByPathAndSiteModel(String path, SiteModel siteModel);
 
+    int countBySiteModel(SiteModel siteModel);
+
+    List<PageModel> findAllBySiteModel(SiteModel siteModel);
+
+    void deleteAllBySiteModel(SiteModel siteModel);
+
 
 
 }

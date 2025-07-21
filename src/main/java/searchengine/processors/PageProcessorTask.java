@@ -1,6 +1,5 @@
 package searchengine.processors;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -13,6 +12,7 @@ import searchengine.model.SiteModel;
 import searchengine.model.enums.IndexStatus;
 import searchengine.repository.PageRepository;
 import searchengine.repository.SiteRepository;
+import searchengine.services.LemmaService;
 
 import java.io.IOException;
 import java.net.URI;
@@ -36,13 +36,14 @@ public class PageProcessorTask extends RecursiveAction {
     private final SiteRepository siteRepository;
     private final CrawlerSettings crawlerSettings;
     private final AtomicBoolean isIndexingRunning;
+    private final LemmaService lemmaService;
     private static final int THRESHOLD = 100;
     private static final int MAX_DEPTH = 5;
 
     // 1 замечание исправлено. Исправлена проблема с инкрементацией currentDepth.
     private int currentDepth;
 
-    public PageProcessorTask(Queue<String> urlsToProcess, SiteModel site, HttpClient httpClient, PageRepository pageRepository, SiteRepository siteRepository, CrawlerSettings crawlerSettings, AtomicBoolean isIndexingRunning, int currentDepth) {
+    public PageProcessorTask(Queue<String> urlsToProcess, SiteModel site, HttpClient httpClient, PageRepository pageRepository, SiteRepository siteRepository, CrawlerSettings crawlerSettings, AtomicBoolean isIndexingRunning, LemmaService lemmaService, int currentDepth) {
         this.urlsToProcess = urlsToProcess;
         this.site = site;
         this.httpClient = httpClient;
@@ -50,6 +51,7 @@ public class PageProcessorTask extends RecursiveAction {
         this.siteRepository = siteRepository;
         this.crawlerSettings = crawlerSettings;
         this.isIndexingRunning = isIndexingRunning;
+        this.lemmaService = lemmaService;
         this.currentDepth = currentDepth;
     }
 
@@ -78,8 +80,8 @@ public class PageProcessorTask extends RecursiveAction {
 
         // 1 замечание исправлено. Исправлена проблема с инкрементацией currentDepth.
         // Создаем подзадачи
-        PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, currentDepth + 1);
-        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, currentDepth + 1);
+        PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, currentDepth + 1);
+        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, currentDepth + 1);
 
         // Запускаем параллельно
         task1.fork();
@@ -129,6 +131,9 @@ public class PageProcessorTask extends RecursiveAction {
                         pageRepository.save(page);
                         updateSiteStatusTime(site);
 
+                        // обрабатываем текст страницы и сохраняем леммы + индекс
+                        lemmaService.processPageContent(page);
+
                         // Извлекаем новые ссылки и добавляем в очередь
                         List<String> newUrls = extractLinks(content, site.getUrl());
                         // 2 замечание исправлено связанное с ошибкой в проверке при добавлении новых ссылок
@@ -150,7 +155,7 @@ public class PageProcessorTask extends RecursiveAction {
                                     new ConcurrentLinkedDeque<>(newUrls),
                                     site, httpClient, pageRepository, siteRepository,
                                     crawlerSettings, isIndexingRunning,
-                                    currentDepth + 1
+                                    lemmaService, currentDepth + 1
                             );
                             subTask.fork();
                             subTask.join();

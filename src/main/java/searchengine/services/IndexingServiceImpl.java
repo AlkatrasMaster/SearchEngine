@@ -73,9 +73,19 @@ public class IndexingServiceImpl implements IndexingService{
                 Thread thread = new Thread(() -> {
                     SiteModel siteModel = null;
                     try {
-                        siteRepository.deleteByUrl(configSite.getUrl());
-                        pageRepository.deleteBySiteModelUrl(configSite.getUrl());
+                        // Удаление предыдущих записей
+                        Optional<SiteModel> existingSiteOpt = siteRepository.findByUrl(configSite.getUrl());
+                        if (existingSiteOpt.isPresent()) {
+                            SiteModel existingSite = existingSiteOpt.get();
+                            List<PageModel> oldPages = pageRepository.findAllBySiteModel(existingSite);
+                            for (PageModel page : oldPages) {
+                                lemmaService.removeLemmasAndIndexesForPage(page);
+                            }
+                            siteRepository.deleteByUrl(configSite.getUrl());
+                            pageRepository.deleteBySiteModelUrl(configSite.getUrl());
+                         }
 
+                        // Создание новой записи сайта
                         siteModel = new SiteModel();
                         siteModel.setUrl(configSite.getUrl());
                         siteModel.setName(configSite.getName());
@@ -213,7 +223,7 @@ public class IndexingServiceImpl implements IndexingService{
 
         // 1 замечание исправлено. Исправлена проблема с инкрементацией currentDepth.
         // Создаем задачу с начальной глубиной 0
-        PageProcessorTask task = new PageProcessorTask(urlQueue, siteModel, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, 0);
+        PageProcessorTask task = new PageProcessorTask(urlQueue, siteModel, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, 0);
 
         pool.invoke(task);
     }
