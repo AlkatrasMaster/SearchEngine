@@ -6,10 +6,9 @@ import org.apache.lucene.morphology.russian.RussianLuceneMorphology;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 @Slf4j
@@ -25,6 +24,25 @@ public class TextAnalyzer {
     }
     public TextAnalyzer(LuceneMorphology luceneMorphology) {
         this.luceneMorphology = luceneMorphology;
+    }
+
+    // 🔹 1. Выделение лемм из строки (поисковый запрос)
+    public List<String> extractLemmas(String text) {
+        List<String> result = new ArrayList<>();
+        String[] words = preprocessText(text);
+
+        for (String word : words) {
+            if (word.isBlank()) continue;
+
+            List<String> morphInfo = luceneMorphology.getMorphInfo(word);
+            if (isServiceWord(morphInfo)) continue;
+
+            List<String> normalForms = luceneMorphology.getNormalForms(word);
+            if (!normalForms.isEmpty()) {
+                result.add(normalForms.get(0));
+            }
+        }
+        return result;
     }
 
     public HashMap<String, Integer> analyseText(String text) {
@@ -53,9 +71,62 @@ public class TextAnalyzer {
         return lemmas;
     }
 
+    // Строит сниппет — отрывок с выделением совпавших лемм
+    public String buildSnippet(String htmlContent, List<String> queryLemmas) {
+        String text = clearHtml(htmlContent);
+        if(text.isBlank()) return "";
+
+        // Разбиваем на слова
+        String[] words = text.split("\\s+");
+
+        // Приводим запрос к множеству для быстрого поиска
+        Set<String> targetLemmas = new HashSet<>(queryLemmas);
+
+        // Ищем первую позицию совпадения
+        int matchIndex = -1;
+        for (int i = 0; i < words.length; i++) {
+            String word = words[i].toLowerCase(Locale.ROOT).replaceAll("[^а-яё]", "");
+            if (word.isBlank()) continue;
+
+            List<String> normalForms = luceneMorphology.getNormalForms(word);
+            if (!normalForms.isEmpty() && targetLemmas.contains(normalForms.get(0))) {
+                matchIndex = i;
+                break;
+            }
+        }
+
+        // Если совпадений нет — вернуть первые 300 символов текста
+        if (matchIndex == -1) {
+            return text.length() > 300 ? text.substring(0, 300) + "..." : text;
+        }
+
+        // Определяем границы сниппета (~50 слов ≈ 3 строки)
+        int start = Math.max(0, matchIndex - 25);
+        int end = Math.min(words.length, matchIndex + 25);
+
+        // Собираем сниппет
+        StringBuilder snippet = new StringBuilder();
+        for (int i = start; i < end; i++) {
+            String originalWord = words[i];
+            String cleanedWord = originalWord.toLowerCase(Locale.ROOT).replaceAll("[^а-яё]", "");
+
+            // Если слово в списке лемм — выделяем жирным
+            List<String> normalForms = luceneMorphology.getNormalForms(cleanedWord);
+            if (!normalForms.isEmpty() && targetLemmas.contains(normalForms.get(0))) {
+                snippet.append("<b>").append(originalWord).append("</b>");
+            } else {
+                snippet.append(originalWord);
+            }
+            snippet.append(" ");
+        }
+
+        return snippet.toString().trim() + "...";
+
+    }
+
     private String[] preprocessText(String text) {
         return text.toLowerCase(Locale.ROOT)
-                .replaceAll("([^а-я\\s])", " ")
+                .replaceAll("([^а-яё\\s])", " ")
                 .trim()
                 .split("\\s+");
     }
@@ -74,36 +145,30 @@ public class TextAnalyzer {
         return false;
     }
 
+    // Очищает HTML от тегов
     public String clearHtml(String htmlContent) {
-        if (htmlContent == null) {
-            return "";
-        }
-
-        // Удаление HTML-тегов
-        String cleanText = htmlContent.replaceAll("<[^>]+>", "");
-
-        // Удаление множественных пробелов
-        cleanText = cleanText.replaceAll("\\s+", " ");
-
-        // Удаление начальных и конечных пробелов
-        cleanText = cleanText.trim();
-
-        return cleanText;
+        if (htmlContent == null) return "";
+        return htmlContent.replaceAll("<[^>]+>", "").replaceAll("\\s+", " ").trim();
     }
 
+    // 🔹 Извлекает <title> страницы
+    public String extractTitle(String htmlContent) {
+        if (htmlContent == null) return "";
+        Matcher matcher = Pattern.compile("<title>(.*?)</title>", Pattern.CASE_INSENSITIVE).matcher(htmlContent);
+        return matcher.find() ? matcher.group(1).trim() : "";
+    }
 
+    // Вспомогательные методы
     private boolean isServiceWord(List<String> wordBaseForms) {
         return wordBaseForms.stream()
                 .anyMatch(form -> {
                     String[] parts = form.split("\\|");
-                    if (parts.length < 2) {
-                        return false;
+                    if (parts.length < 2) return false;
+                    String partOfSpeech = parts[1].trim().toUpperCase();
+                    for (String particle : particlesNames) {
+                        if (partOfSpeech.contains(particle)) return true;
                     }
-                    String partOfSpeech = parts[1].trim();
-                    return partOfSpeech.equals("СОЮЗ") ||
-                           partOfSpeech.equals("МЕЖД") ||
-                           partOfSpeech.equals("ПРЕДЛ");
+                    return false;
                 });
     }
-
 }

@@ -29,5 +29,4 @@ public class LemmaModel {
     @OneToMany(mappedBy = "lemma", cascade = CascadeType.ALL)
     private List<IndexModel> indices;
 
-
 }

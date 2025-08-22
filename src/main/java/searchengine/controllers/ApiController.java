@@ -3,9 +3,12 @@ package searchengine.controllers;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import searchengine.dto.statistics.SearchResponse;
 import searchengine.dto.statistics.StatisticsResponse;
+import searchengine.exceptions.IndexNotReadyException;
 import searchengine.services.IndexingService;
 import searchengine.services.IndexingServiceImpl;
+import searchengine.services.SearchService;
 import searchengine.services.StatisticsService;
 
 import java.util.HashMap;
@@ -20,9 +23,12 @@ public class ApiController {
     private final StatisticsService statisticsService;
     private final IndexingService indexingService;
 
-    public ApiController(StatisticsService statisticsService, IndexingServiceImpl indexingServiceImpl, IndexingService indexingService) {
+    private final SearchService searchService;
+
+    public ApiController(StatisticsService statisticsService, IndexingServiceImpl indexingServiceImpl, IndexingService indexingService, SearchService searchService) {
         this.statisticsService = statisticsService;
         this.indexingService = indexingService;
+        this.searchService = searchService;
     }
 
     @GetMapping("/statistics")
@@ -113,6 +119,37 @@ public class ApiController {
             return ResponseEntity.badRequest().body(response);
         }
 
+    }
+
+    @GetMapping("/search")
+    public ResponseEntity<?> search(
+            @RequestParam(value = "query", required = false) String query,
+            @RequestParam(value = "site", required = false) String site,
+            @RequestParam(value = "offset", defaultValue = "0") int offset,
+            @RequestParam(value = "limit", defaultValue = "20") int limit) {
+
+        if (query == null || query.trim().isEmpty()) {
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("result", false);
+            errorResponse.put("error", "Задан пустой поисковый запрос");
+            return ResponseEntity.badRequest().body(errorResponse);
+        }
+
+        try {
+            SearchResponse response = searchService.search(query, site, offset, limit);
+            return ResponseEntity.ok(response);
+        } catch (IndexNotReadyException e) {
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("result", false);
+            errorResponse.put("error", e.getMessage());
+            return ResponseEntity.badRequest().body(errorResponse);
+        } catch (Exception e) {
+            log.error("Ошибка при выполнении поиска: {}", e.getMessage(), e);
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("result", false);
+            errorResponse.put("error", "Произошла ошибка при выполнении поиска");
+            return ResponseEntity.badRequest().body(errorResponse);
+        }
     }
 
 }

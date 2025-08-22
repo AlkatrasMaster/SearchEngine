@@ -40,7 +40,6 @@ public class PageProcessorTask extends RecursiveAction {
     private static final int THRESHOLD = 100;
     private static final int MAX_DEPTH = 5;
 
-    // 1 замечание исправлено. Исправлена проблема с инкрементацией currentDepth.
     private int currentDepth;
 
     public PageProcessorTask(Queue<String> urlsToProcess, SiteModel site, HttpClient httpClient, PageRepository pageRepository, SiteRepository siteRepository, CrawlerSettings crawlerSettings, AtomicBoolean isIndexingRunning, LemmaService lemmaService, int currentDepth) {
@@ -78,7 +77,7 @@ public class PageProcessorTask extends RecursiveAction {
             }
         }
 
-        // 1 замечание исправлено. Исправлена проблема с инкрементацией currentDepth.
+
         // Создаем подзадачи
         PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, currentDepth + 1);
         PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, currentDepth + 1);
