@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Component
 @Slf4j
@@ -34,12 +35,16 @@ public class TextAnalyzer {
         for (String word : words) {
             if (word.isBlank()) continue;
 
-            List<String> morphInfo = luceneMorphology.getMorphInfo(word);
-            if (isServiceWord(morphInfo)) continue;
+            try {
+                List<String> morphInfo = luceneMorphology.getMorphInfo(word);
+                if (isServiceWord(morphInfo)) continue;
 
-            List<String> normalForms = luceneMorphology.getNormalForms(word);
-            if (!normalForms.isEmpty()) {
-                result.add(normalForms.get(0));
+                List<String> normalForms = luceneMorphology.getNormalForms(word);
+                if (!normalForms.isEmpty()) {
+                    result.add(normalForms.get(0));
+                }
+            } catch (Exception e) {
+                log.debug("Не удалось разобрать слово '{}': {}", word, e.getMessage());
             }
         }
         return result;
@@ -54,18 +59,22 @@ public class TextAnalyzer {
                 continue;
             }
 
-            List<String> wordBaseForms = luceneMorphology.getMorphInfo(word);
-            if (isServiceWord(wordBaseForms)) {
-                continue;
-            }
+            try {
+                List<String> wordBaseForms = luceneMorphology.getMorphInfo(word);
+                if (isServiceWord(wordBaseForms)) {
+                    continue;
+                }
 
-            List<String> normalForms = luceneMorphology.getNormalForms(word);
-            if (normalForms.isEmpty()) {
-                continue;
-            }
+                List<String> normalForms = luceneMorphology.getNormalForms(word);
+                if (normalForms.isEmpty()) {
+                    continue;
+                }
 
-            String lemma = normalForms.get(0);
-            lemmas.put(lemma, lemmas.getOrDefault(lemma, 0) + 1);
+                String lemma = normalForms.get(0);
+                lemmas.put(lemma, lemmas.getOrDefault(lemma, 0) + 1);
+            } catch (Exception e) {
+                log.debug("Не удалось проанализировать слово '{}': {}", word, e.getMessage());
+            }
         }
 
         return lemmas;
@@ -85,14 +94,20 @@ public class TextAnalyzer {
         // Ищем первую позицию совпадения
         int matchIndex = -1;
         for (int i = 0; i < words.length; i++) {
-            String word = words[i].toLowerCase(Locale.ROOT).replaceAll("[^а-яё]", "");
-            if (word.isBlank()) continue;
+            String cleaned = words[i].toLowerCase(Locale.ROOT).replaceAll("[^а-яё]", "");
+            if (cleaned.isBlank()) continue;
 
-            List<String> normalForms = luceneMorphology.getNormalForms(word);
-            if (!normalForms.isEmpty() && targetLemmas.contains(normalForms.get(0))) {
-                matchIndex = i;
-                break;
+            try {
+                List<String> normalForms = luceneMorphology.getNormalForms(cleaned);
+                if (!normalForms.isEmpty() && targetLemmas.contains(normalForms.get(0))) {
+                    matchIndex = i;
+                    break;
+                }
+            } catch (Exception e) {
+                log.debug("Морфологическая ошибка на '{}': {}", cleaned, e.getMessage());
             }
+
+
         }
 
         // Если совпадений нет — вернуть первые 300 символов текста
@@ -108,11 +123,18 @@ public class TextAnalyzer {
         StringBuilder snippet = new StringBuilder();
         for (int i = start; i < end; i++) {
             String originalWord = words[i];
-            String cleanedWord = originalWord.toLowerCase(Locale.ROOT).replaceAll("[^а-яё]", "");
+            String cleaned = originalWord.toLowerCase(Locale.ROOT).replaceAll("[^а-яё]", "");
+
+            boolean highlight = false;
 
             // Если слово в списке лемм — выделяем жирным
-            List<String> normalForms = luceneMorphology.getNormalForms(cleanedWord);
-            if (!normalForms.isEmpty() && targetLemmas.contains(normalForms.get(0))) {
+            try {
+                List<String> normalForms = luceneMorphology.getNormalForms(cleaned);
+                highlight = !normalForms.isEmpty() && targetLemmas.contains(normalForms.get(0));
+            } catch (Exception ignored) {
+            }
+
+            if (highlight) {
                 snippet.append("<b>").append(originalWord).append("</b>");
             } else {
                 snippet.append(originalWord);
@@ -158,7 +180,7 @@ public class TextAnalyzer {
         return matcher.find() ? matcher.group(1).trim() : "";
     }
 
-    // Вспомогательные методы
+    // Проверка служебных слов
     private boolean isServiceWord(List<String> wordBaseForms) {
         return wordBaseForms.stream()
                 .anyMatch(form -> {

@@ -1,6 +1,7 @@
 package searchengine.services;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 import searchengine.config.Site;
@@ -22,6 +23,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class SearchServiceImpl implements SearchService{
 
     private final LemmaRepository lemmaRepository;
@@ -31,10 +33,15 @@ public class SearchServiceImpl implements SearchService{
     private final TextAnalyzer textAnalyzer;
     @Override
     public SearchResponse search(String query, String siteUrl, int offset, int limit) {
+        log.info("Поиск запроса '{}' для сайта '{}', offset={}, limit={}", query, siteUrl, offset, limit);
+
         // 1. Извлекаем и фильтруем леммы (убираем предлоги, союзы и т.д.)
         List<String> lemmas = textAnalyzer.extractLemmas(query);
+        log.info("Извлеченные леммы из запроса: {}", lemmas)
+        ;
 
         if (lemmas.isEmpty()) {
+            log.warn("Не удалось выделить леммы из запроса '{}'", query);
             throw new IndexNotReadyException("Не удалось выделить леммы из запроса");
         }
 
@@ -51,29 +58,39 @@ public class SearchServiceImpl implements SearchService{
             }
         }
 
+        log.info("Сайты для поиска: {}", sites.stream().map(SiteModel::getUrl).toList());
+
         // Получаем LemmaModel для лемм, исключая слишком часто встречающиеся (частотные) леммы
         List<LemmaModel> filteredLemmas = new ArrayList<>();
         for (String lemmaText : lemmas) {
             for (SiteModel site : sites) {
                 lemmaRepository.findByLemmaAndSite(lemmaText, site).ifPresent(lemma -> {
                     int totalPages = pageRepository.countBySiteModel(site);
-                    // Исключаем "шумные" леммы (встречаются на более чем 50% страниц)
-                    if ((double) lemma.getFrequency() / totalPages < 0.5) {
+                    double frequencyRatio = (double) lemma.getFrequency() / totalPages;
+                    if (frequencyRatio < 0.5) {
                         filteredLemmas.add(lemma);
+                        log.info("Лемма '{}' найдена для сайта '{}', частота={}, ratio={}",
+                                lemma.getLemma(), site.getUrl(), lemma.getFrequency(), frequencyRatio);
+                    } else {
+                        log.info("Лемма '{}' слишком частая для сайта '{}', пропускаем (ratio={})",
+                                lemma.getLemma(), site.getUrl(), frequencyRatio);
                     }
                 });
             }
         }
 
         if (filteredLemmas.isEmpty()) {
+            log.info("После фильтрации по частоте леммы не найдены");
             return emptyResponse(); // Не найдено ни одной релевантной леммы
         }
 
         // Сортируем леммы по редкости (по возрастанию частоты)
         filteredLemmas.sort(Comparator.comparingInt(LemmaModel::getFrequency));
+        log.info("Леммы после сортировки по редкости: {}", filteredLemmas.stream().map(LemmaModel::getLemma).toList());
 
         // Получаем пересечение страниц, на которых встречаются все леммы
         Set<PageModel> resultPages = getCommonPages(filteredLemmas);
+        log.info("Найдено страниц, содержащих все леммы: {}", resultPages.size());
         if (resultPages.isEmpty()) {
             return emptyResponse(); // Не найдено страниц, содержащих все леммы
         }
@@ -83,6 +100,7 @@ public class SearchServiceImpl implements SearchService{
 
         // Нормализуем релевантность (делим на максимум)
         float maxRelevance = Collections.max(relevanceMap.values());
+        log.info("Максимальная релевантность: {}", maxRelevance);
 
         List<SearchResult> results = new ArrayList<>();
         for (Map.Entry<PageModel, Float> entry : relevanceMap.entrySet()) {
@@ -104,6 +122,8 @@ public class SearchServiceImpl implements SearchService{
                     snippet,
                     relevance
             ));
+
+            log.info("Страница '{}' релевантность={}, title='{}'", page.getPath(), relevance, title);
         }
 
         // Сортировка результатов по релевантности (по убыванию)
@@ -118,6 +138,8 @@ public class SearchServiceImpl implements SearchService{
         response.setResult(true);
         response.setCount(results.size());  // общее количество найденных результатов (без учета offset/limit)
         response.setData(pageResult);
+
+        log.info("Возвращено результатов: {}", pageResult.size());
 
         return response;
 
@@ -137,6 +159,9 @@ public class SearchServiceImpl implements SearchService{
                     .filter(p -> p.getSiteModel().equals(site)) // фильтрация по сайту
                     .collect(Collectors.toSet());
 
+            log.info("Для леммы '{}' найдено {} страниц на сайте '{}'",
+                    lemma.getLemma(), pagesWithLemma.size(), site.getUrl());
+
             if (first) {
                 pages = pagesWithLemma;
                 first = false;
@@ -144,30 +169,30 @@ public class SearchServiceImpl implements SearchService{
                 pages.retainAll(pagesWithLemma);
             }
 
-            if (pages.isEmpty()) break;
+            if (pages.isEmpty()) {
+                log.info("После пересечения страниц для леммы '{}' больше не осталось", lemma.getLemma());
+                break;
+            }
         }
+
+        log.info("Итоговое количество страниц для сайта '{}': {}", site.getUrl(), pages.size());
         return pages;
     }
 
     // Перегруженный метод — поиск по всем сайтам
     private Set<PageModel> getCommonPages(List<LemmaModel> lemmas) {
-        Set<PageModel> result = new HashSet<>();
-        boolean first = true;
+        Set<PageModel> allPages = new HashSet<>();
 
         List<SiteModel> sites = siteRepository.findAll();
-
         for (SiteModel site : sites) {
             Set<PageModel> sitePages = getCommonPages(lemmas, site);
-
-            if (first) {
-                result = sitePages;
-                first = false;
-            } else {
-                result.addAll(sitePages);
-            }
+            allPages.addAll(sitePages); // объединение
+            log.info("Добавлено {} страниц с сайта '{}'", sitePages.size(), site.getUrl());
         }
 
-        return result;
+        log.info("Общее количество найденных страниц по всем сайтам: {}", allPages.size());
+        return allPages;
+
     }
 
     /**
