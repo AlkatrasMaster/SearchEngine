@@ -18,15 +18,15 @@ spring:
 
 indexing-settings:
   sites:
-    - url: https://lenta.ru
-      name: Лента.ру
-#    - url: https://skillbox.ru
+    - url: https://lenta.ru/
+      name: Lenta.ru
+#    - url: https://skillbox.ru/
 #      name: Skillbox
-    - url: https://www.playback.ru
-      name: PlayBack.Ru
+#    - url: https://www.playback.ru
+#      name: PlayBack.Ru
 
 
 crawler-setting:
   user-agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (HTML, like Gecko) Chrome/74.0.3729.169 Safari/537.3"
   referrer: "https://www.google.com"
-  delay-between-requests: 1000
+  delay-between-requests: [1200, 2000]

@@ -67,7 +67,7 @@ public class SearchServiceImpl implements SearchService{
                 lemmaRepository.findByLemmaAndSite(lemmaText, site).ifPresent(lemma -> {
                     int totalPages = pageRepository.countBySiteModel(site);
                     double frequencyRatio = (double) lemma.getFrequency() / totalPages;
-                    if (frequencyRatio < 0.5) {
+                    if (frequencyRatio < 0.7) {
                         filteredLemmas.add(lemma);
                         log.info("Лемма '{}' найдена для сайта '{}', частота={}, ratio={}",
                                 lemma.getLemma(), site.getUrl(), lemma.getFrequency(), frequencyRatio);

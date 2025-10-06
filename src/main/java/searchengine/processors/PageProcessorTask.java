@@ -38,7 +38,7 @@ public class PageProcessorTask extends RecursiveAction {
     private final AtomicBoolean isIndexingRunning;
     private final LemmaService lemmaService;
     private static final int THRESHOLD = 100;
-    private static final int MAX_DEPTH = 5;
+    private static final int MAX_DEPTH = 10;
 
     private int currentDepth;
 
@@ -172,9 +172,9 @@ public class PageProcessorTask extends RecursiveAction {
     }
 
     private String fetchPageContentWithDelay(String url) {
-        // Задержка от 500 до 5000 мс случайным образом
+        // Задержка от 1500 до 5000 мс случайным образом
         try {
-            long delay = 500 + (long)(Math.random() * 4500);
+            long delay = 1500 + (long)(Math.random() * 5000);
             Thread.sleep(delay);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
