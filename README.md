@@ -141,7 +141,7 @@ java -jar target/searchengine-1.0.jar
 
 GET /startIndexing — запустить индексацию всех сайтов
 
-![StartIndex GIF](images/StartIndexis.gif)
+![StartIndex GIF](resources/images/StartIndexis.gif)
 
 GET /stopIndexing — остановить индексацию
 
