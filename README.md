@@ -139,14 +139,22 @@ java -jar target/searchengine-1.0.jar
 
 ## 🔧Основные API эндпоинты
 
-GET /startIndexing — запустить индексацию всех сайтов
+###  🏁 GET /startIndexing — запустить индексацию всех сайтов
 
-![StartIndex GIF](resources/images/StartIndexis.gif)
+![StartIndex GIF](images/StartIndexis.gif)
 
-GET /stopIndexing — остановить индексацию
+### 🛑 GET /stopIndexing — остановить индексацию
 
-POST /indexPage?url={pageUrl} — проиндексировать отдельную страницу
+![StopIndexis GIF](images/StopIndexis.gif)
 
-GET /search?query={слово}&site={url} — выполнить поиск
+### 🔂 POST /indexPage?url={pageUrl} — проиндексировать отдельную страницу
 
-GET /statistics — получить статистику
+![IndexisPage GIF](images/IndexisPage.gif)
+
+### 🔎 GET /search?query={слово}&site={url} — выполнить поиск
+
+![Search GIF](images/Search.gif)
+
+### 📈 GET /statistics — получить статистику
+
+![Statistics GIF](images/Statistics.gif)
