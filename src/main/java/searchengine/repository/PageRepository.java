@@ -22,8 +22,6 @@ public interface PageRepository extends JpaRepository<PageModel, Integer> {
 
     PageModel findByPathAndSiteModelId(String path, Integer siteModelId);
 
-    boolean existsByPathAndSiteModel(String url, SiteModel siteModel);
-
     Optional<PageModel> findByPathAndSiteModel(String path, SiteModel siteModel);
 
     int countBySiteModel(SiteModel siteModel);

@@ -4,7 +4,7 @@ server:
 spring:
   datasource:
     username: root
-    password: SwKoToR32
+    password: SWKOTOR32
     url: jdbc:mysql://localhost:3306/search_engine?useSSL=false&requireSSL=false&allowPublicKeyRetrieval=true
 
   jpa:

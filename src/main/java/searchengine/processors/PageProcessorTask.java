@@ -90,12 +90,17 @@ public class PageProcessorTask extends RecursiveAction {
     }
 
     private void processSequentially() {
+        // Используем Set для отслеживания уже посещённых ссылок
+        Set<String> visitedUrls = new HashSet<>();
+
         while (!urlsToProcess.isEmpty() && currentDepth < MAX_DEPTH && isIndexingRunning.get()) {
             String currentUrl = urlsToProcess.poll();
 
-            if (currentUrl == null || currentUrl.isEmpty()) {
+            if (currentUrl == null || currentUrl.isEmpty() || visitedUrls.contains(currentUrl)) {
                 continue;
             }
+
+            visitedUrls.add(currentUrl);
 
             try {
                 URI uri = new URI(currentUrl);
@@ -114,7 +119,7 @@ public class PageProcessorTask extends RecursiveAction {
                 }
 
                 // Проверяем, существует ли страница в базе данных
-                if (!pageRepository.existsByPathAndSiteModel(getRelativePath(currentUrl, site.getUrl()), site)) {
+                if (pageRepository.findByPathAndSiteModel(getRelativePath(currentUrl, site.getUrl()), site).isEmpty()) {
                     // Получаем содержимое страницы с задержкой для аккуратного обхода
                     String content = fetchPageContentWithDelay(currentUrl);
 
@@ -141,9 +146,10 @@ public class PageProcessorTask extends RecursiveAction {
                         for (String newUrl : newUrls) {
                             String newRelativePath = getRelativePath(newUrl, site.getUrl());
 
-                            if (newRelativePath == null &&
+                            // ✅ Исправлено: Логическая ошибка в методе проверки ссылок
+                            if (newRelativePath != null &&
                                 !urlsToProcess.contains(newUrl) &&
-                                !pageRepository.existsByPathAndSiteModel(newRelativePath, site) &&
+                                pageRepository.findByPathAndSiteModel(newRelativePath, site).isEmpty() &&
                                 isUrlFromSameSite(newUrl, site.getUrl())) {
                                 urlsToProcess.add(newUrl);
                             }

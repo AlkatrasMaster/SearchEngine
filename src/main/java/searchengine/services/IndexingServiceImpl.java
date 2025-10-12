@@ -144,7 +144,7 @@ public class IndexingServiceImpl implements IndexingService{
         isIndexingRunning.set(false);
 
         // Получаем список сайтов, которые находятся в процессе индексации
-        List<SiteModel> indexingSites = siteRepository.findByStatus(IndexStatus.INDEXED);
+        List<SiteModel> indexingSites = siteRepository.findByStatus(IndexStatus.INDEXING);
 
         // Обновляем статус всех сайтов в процессе индексации
         for (SiteModel site : indexingSites) {
