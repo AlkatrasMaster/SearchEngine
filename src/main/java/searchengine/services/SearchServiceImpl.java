@@ -35,114 +35,115 @@ public class SearchServiceImpl implements SearchService{
     public SearchResponse search(String query, String siteUrl, int offset, int limit) {
         log.info("Поиск запроса '{}' для сайта '{}', offset={}, limit={}", query, siteUrl, offset, limit);
 
-        // 1. Извлекаем и фильтруем леммы (убираем предлоги, союзы и т.д.)
-        List<String> lemmas = textAnalyzer.extractLemmas(query);
-        log.info("Извлеченные леммы из запроса: {}", lemmas)
-        ;
+        List<String> lemmas = extractValidLemmas(query);
+        List<SiteModel> sites = resolveSites(siteUrl);
+        List<LemmaModel> filteredLemmas = filterLemmasByFrequency(lemmas, sites);
 
-        if (lemmas.isEmpty()) {
-            log.warn("Не удалось выделить леммы из запроса '{}'", query);
-            throw new IndexNotReadyException("Не удалось выделить леммы из запроса");
+        if (filteredLemmas.isEmpty()) {
+            log.info("После фильтрации по частоте леммы не найдены");
+            return emptyResponse();
         }
 
-        // Получаем список сайтов
-        List<SiteModel> sites;
+        Set<PageModel> resultPages = getCommonPages(filteredLemmas);
+        if (resultPages.isEmpty()) {
+            return emptyResponse();
+        }
+
+        Map<PageModel, Float> relevanceMap = calculateRelevance(resultPages, filteredLemmas);
+        List<SearchResult> results = buildSearchResults(relevanceMap, lemmas);
+
+        return paginateResults(results, offset, limit);
+
+    }
+
+    // Извлечение лемм
+    private List<String> extractValidLemmas(String query) {
+        List<String> lemmas = textAnalyzer.extractLemmas(query);
+        log.info("Извлеченные леммы: {}", lemmas);
+
+        if (lemmas.isEmpty()) {
+            throw new IndexNotReadyException("Не удалось выделить леммы из запроса");
+        }
+        return lemmas;
+    }
+
+    // Определение сайтов для поиска
+    private List<SiteModel> resolveSites(String siteUrl) {
         if (siteUrl != null && !siteUrl.isEmpty()) {
             SiteModel site = siteRepository.findByUrl(siteUrl)
                     .orElseThrow(() -> new IndexNotReadyException("Сайт не проиндексирован: " + siteUrl));
-            sites = List.of(site);
-        } else {
-            sites = siteRepository.findAll();
-            if (sites.isEmpty()) {
-                throw new IndexNotReadyException("Ни один сайт не проиндексирован");
-            }
+            return List.of(site);
         }
 
-        log.info("Сайты для поиска: {}", sites.stream().map(SiteModel::getUrl).toList());
+        List<SiteModel> allSites = siteRepository.findAll();
+        if (allSites.isEmpty()) {
+            throw new IndexNotReadyException("Ни один сайт не проиндексирован");
+        }
 
-        // Получаем LemmaModel для лемм, исключая слишком часто встречающиеся (частотные) леммы
+        log.info("Сайты для поиска: {}", allSites.stream().map(SiteModel::getUrl).toList());
+        return allSites;
+    }
+
+    // Фильтрация лемм по частоте встречаемости
+    private List<LemmaModel> filterLemmasByFrequency(List<String> lemmas, List<SiteModel> sites) {
         List<LemmaModel> filteredLemmas = new ArrayList<>();
+
         for (String lemmaText : lemmas) {
             for (SiteModel site : sites) {
                 lemmaRepository.findByLemmaAndSite(lemmaText, site).ifPresent(lemma -> {
                     int totalPages = pageRepository.countBySiteModel(site);
                     double frequencyRatio = (double) lemma.getFrequency() / totalPages;
+
                     if (frequencyRatio < 0.7) {
                         filteredLemmas.add(lemma);
-                        log.info("Лемма '{}' найдена для сайта '{}', частота={}, ratio={}",
-                                lemma.getLemma(), site.getUrl(), lemma.getFrequency(), frequencyRatio);
-                    } else {
-                        log.info("Лемма '{}' слишком частая для сайта '{}', пропускаем (ratio={})",
-                                lemma.getLemma(), site.getUrl(), frequencyRatio);
+                        log.debug("Лемма '{}' оставлена для '{}', ratio={}", lemmaText, site.getUrl(), frequencyRatio);
                     }
                 });
             }
         }
 
-        if (filteredLemmas.isEmpty()) {
-            log.info("После фильтрации по частоте леммы не найдены");
-            return emptyResponse(); // Не найдено ни одной релевантной леммы
-        }
-
-        // Сортируем леммы по редкости (по возрастанию частоты)
         filteredLemmas.sort(Comparator.comparingInt(LemmaModel::getFrequency));
-        log.info("Леммы после сортировки по редкости: {}", filteredLemmas.stream().map(LemmaModel::getLemma).toList());
+        return filteredLemmas;
+    }
 
-        // Получаем пересечение страниц, на которых встречаются все леммы
-        Set<PageModel> resultPages = getCommonPages(filteredLemmas);
-        log.info("Найдено страниц, содержащих все леммы: {}", resultPages.size());
-        if (resultPages.isEmpty()) {
-            return emptyResponse(); // Не найдено страниц, содержащих все леммы
-        }
-
-        // Рассчитываем релевантность для каждой страницы
-        Map<PageModel, Float> relevanceMap = calculateRelevance(resultPages, filteredLemmas);
-
-        // Нормализуем релевантность (делим на максимум)
+    // Построение результатов
+    private List<SearchResult> buildSearchResults(Map<PageModel, Float> relevanceMap, List<String> lemmas) {
         float maxRelevance = Collections.max(relevanceMap.values());
-        log.info("Максимальная релевантность: {}", maxRelevance);
-
         List<SearchResult> results = new ArrayList<>();
+
         for (Map.Entry<PageModel, Float> entry : relevanceMap.entrySet()) {
             PageModel page = entry.getKey();
-            float relevance = entry.getValue() / maxRelevance;
+            float normalizedRelevance = entry.getValue() / maxRelevance;
 
-            // Строим фрагмент текста (сниппет), где встречаются леммы
             String snippet = textAnalyzer.buildSnippet(page.getContent(), lemmas);
-
-            // Извлекаем заголовок страницы
             String title = textAnalyzer.extractTitle(page.getContent());
 
-            // Добавляем результат
             results.add(new SearchResult(
                     page.getSiteModel().getUrl(),
                     page.getSiteModel().getName(),
                     page.getPath(),
                     title,
                     snippet,
-                    relevance
+                    normalizedRelevance
             ));
-
-            log.info("Страница '{}' релевантность={}, title='{}'", page.getPath(), relevance, title);
         }
 
-        // Сортировка результатов по релевантности (по убыванию)
         results.sort(Comparator.comparingDouble(SearchResult::getRelevance).reversed());
+        return results;
+    }
 
-        // Постраничный вывод (offset + limit)
+    // Постраничный вывод
+    private SearchResponse paginateResults(List<SearchResult> results, int offset, int limit) {
         int end = Math.min(offset + limit, results.size());
-        List<SearchResult> pageResult = results.subList(Math.min(offset, results.size()), end);
+        List<SearchResult> pageResults = results.subList(Math.min(offset, results.size()), end);
 
-        // Формируем успешный ответ
         SearchResponse response = new SearchResponse();
         response.setResult(true);
-        response.setCount(results.size());  // общее количество найденных результатов (без учета offset/limit)
-        response.setData(pageResult);
+        response.setCount(results.size());
+        response.setData(pageResults);
 
-        log.info("Возвращено результатов: {}", pageResult.size());
-
+        log.info("Возвращено {} результатов из {}", pageResults.size(), results.size());
         return response;
-
     }
 
 
