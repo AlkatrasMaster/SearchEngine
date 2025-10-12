@@ -6,6 +6,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.dao.DataIntegrityViolationException;
+import searchengine.config.CrawlerProperties;
 import searchengine.config.CrawlerSettings;
 import searchengine.model.PageModel;
 import searchengine.model.SiteModel;
@@ -37,12 +38,10 @@ public class PageProcessorTask extends RecursiveAction {
     private final CrawlerSettings crawlerSettings;
     private final AtomicBoolean isIndexingRunning;
     private final LemmaService lemmaService;
-    private static final int THRESHOLD = 100;
-    private static final int MAX_DEPTH = 10;
-
+    private final CrawlerProperties crawlerProperties;
     private int currentDepth;
 
-    public PageProcessorTask(Queue<String> urlsToProcess, SiteModel site, HttpClient httpClient, PageRepository pageRepository, SiteRepository siteRepository, CrawlerSettings crawlerSettings, AtomicBoolean isIndexingRunning, LemmaService lemmaService, int currentDepth) {
+    public PageProcessorTask(Queue<String> urlsToProcess, SiteModel site, HttpClient httpClient, PageRepository pageRepository, SiteRepository siteRepository, CrawlerSettings crawlerSettings, AtomicBoolean isIndexingRunning, LemmaService lemmaService, CrawlerProperties crawlerProperties, int currentDepth) {
         this.urlsToProcess = urlsToProcess;
         this.site = site;
         this.httpClient = httpClient;
@@ -51,6 +50,7 @@ public class PageProcessorTask extends RecursiveAction {
         this.crawlerSettings = crawlerSettings;
         this.isIndexingRunning = isIndexingRunning;
         this.lemmaService = lemmaService;
+        this.crawlerProperties = crawlerProperties;
         this.currentDepth = currentDepth;
     }
 
@@ -61,7 +61,10 @@ public class PageProcessorTask extends RecursiveAction {
             return;
         }
 
-        if (urlsToProcess.size() <= THRESHOLD || currentDepth >= MAX_DEPTH) {
+        int threshold = crawlerProperties.getThreshold();
+        int maxDepth = crawlerProperties.getMaxDepth();
+
+        if (urlsToProcess.size() <= threshold || currentDepth >= maxDepth) {
             processSequentially();
             return;
         }
@@ -79,8 +82,8 @@ public class PageProcessorTask extends RecursiveAction {
 
 
         // Создаем подзадачи
-        PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, currentDepth + 1);
-        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, currentDepth + 1);
+        PageProcessorTask task1 = new PageProcessorTask(halfUrls, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, crawlerProperties, currentDepth + 1);
+        PageProcessorTask task2 = new PageProcessorTask(urlsToProcess, site, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, crawlerProperties, currentDepth + 1);
 
         // Запускаем параллельно
         task1.fork();
@@ -92,8 +95,9 @@ public class PageProcessorTask extends RecursiveAction {
     private void processSequentially() {
         // Используем Set для отслеживания уже посещённых ссылок
         Set<String> visitedUrls = new HashSet<>();
+        int maxDepth = crawlerProperties.getMaxDepth();
 
-        while (!urlsToProcess.isEmpty() && currentDepth < MAX_DEPTH && isIndexingRunning.get()) {
+        while (!urlsToProcess.isEmpty() && currentDepth < maxDepth && isIndexingRunning.get()) {
             String currentUrl = urlsToProcess.poll();
 
             if (currentUrl == null || currentUrl.isEmpty() || visitedUrls.contains(currentUrl)) {
@@ -155,13 +159,13 @@ public class PageProcessorTask extends RecursiveAction {
                             }
                         }
 
-                        if (!newUrls.isEmpty() && currentDepth + 1 < MAX_DEPTH) {
+                        if (!newUrls.isEmpty() && currentDepth + 1 < maxDepth) {
                             PageProcessorTask subTask = new PageProcessorTask(
                                     new ConcurrentLinkedDeque<>(newUrls),
                                     site, httpClient, pageRepository, siteRepository,
                                     crawlerSettings, isIndexingRunning,
-                                    lemmaService, currentDepth + 1
-                            );
+                                    lemmaService, crawlerProperties ,
+                                    currentDepth + 1);
                             subTask.fork();
                             subTask.join();
                         }

@@ -2,6 +2,7 @@ package searchengine.services;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import searchengine.config.CrawlerProperties;
 import searchengine.config.CrawlerSettings;
 import searchengine.config.Site;
 import searchengine.config.SitesList;
@@ -34,15 +35,17 @@ public class IndexingServiceImpl implements IndexingService{
     private final PageRepository pageRepository;
     private final HttpClient httpClient;
     private final CrawlerSettings crawlerSettings;
+    private final CrawlerProperties crawlerProperties;
     private final SitesList sitesList;
     private final LemmaService lemmaService;
     private final AtomicBoolean isIndexingRunning = new AtomicBoolean(false);
 
 
-    public IndexingServiceImpl(SiteRepository siteRepository, PageRepository pageRepository, CrawlerSettings crawlerSettings, SitesList sitesList, LemmaService lemmaService) {
+    public IndexingServiceImpl(SiteRepository siteRepository, PageRepository pageRepository, CrawlerSettings crawlerSettings, CrawlerProperties crawlerProperties, SitesList sitesList, LemmaService lemmaService) {
         this.siteRepository = siteRepository;
         this.pageRepository = pageRepository;
         this.crawlerSettings = crawlerSettings;
+        this.crawlerProperties = crawlerProperties;
         this.sitesList = sitesList;
         this.lemmaService = lemmaService;
         this.httpClient = HttpClient.newHttpClient();
@@ -223,7 +226,7 @@ public class IndexingServiceImpl implements IndexingService{
 
         // 1 замечание исправлено. Исправлена проблема с инкрементацией currentDepth.
         // Создаем задачу с начальной глубиной 0
-        PageProcessorTask task = new PageProcessorTask(urlQueue, siteModel, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, 0);
+        PageProcessorTask task = new PageProcessorTask(urlQueue, siteModel, httpClient, pageRepository, siteRepository, crawlerSettings, isIndexingRunning, lemmaService, crawlerProperties , 0);
 
         pool.invoke(task);
     }
