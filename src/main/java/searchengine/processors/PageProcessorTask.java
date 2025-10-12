@@ -142,7 +142,7 @@ public class PageProcessorTask extends RecursiveAction {
                         List<String> newUrls = extractLinks(content, site.getUrl());
                         // 2 замечание исправлено связанное с ошибкой в проверке при добавлении новых ссылок
                         // 3 замечание исправлено связанное с тем что getRelativePath может вернуть null
-                        // Проверяем каждую новую ссылку перед добавлением
+                        // проверяем каждую новую ссылку перед добавлением
                         for (String newUrl : newUrls) {
                             String newRelativePath = getRelativePath(newUrl, site.getUrl());
 

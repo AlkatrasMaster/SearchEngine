@@ -37,87 +37,36 @@ public class ApiController {
 
     @GetMapping("/startIndexing")
     public ResponseEntity<Map<String, Object>>  startIndexing() {
-        try {
-            // Проверяем, не запущен ли процесс индексации
-            if (indexingService.isIndexingRunning()) {
-                Map<String, Object> response = new HashMap<>();
-                response.put("result", false);
-                response.put("error", "Индексация уже запущена");
-                return ResponseEntity.badRequest().body(response);
-            }
-
-            // Запускаем индексацию в отдельном потоке
-            CompletableFuture.runAsync(() -> {
-                try {
-                    indexingService.startIndexing();
-                } catch (Exception e) {
-                    log.error("Ошибка при запуске индексации: " + e.getMessage());
-                }
-            });
-
-            // Немедленно возвращаем успешный ответ
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", true);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            // Обработка других исключений
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", false);
-            response.put("error", "Произошла ошибка при запуске индексации: " + e.getMessage());
-            return ResponseEntity.badRequest().body(response);
+        if (indexingService.isIndexingRunning()) {
+            throw new IllegalStateException("Индексация уже запущена");
         }
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                indexingService.startIndexing();
+            } catch (Exception e) {
+                log.error("Ошибка при запуске индексации: {}", e.getMessage(), e);
+            }
+        });
+        return ResponseEntity.ok(Map.of("result", true));
     }
 
     @PostMapping("/indexPage")
-    public ResponseEntity<Map<String, Object>> indexPage(@RequestParam("url") String url) {
-        Map<String, Object> response = new HashMap<>();
-
+    public ResponseEntity<Map<String, Object>> indexPage(@RequestParam("url") String url) throws Exception {
         if (url == null || url.trim().isEmpty()) {
-            response.put("result", false);
-            response.put("error", "Адрес страницы не может быть пустым");
-            return ResponseEntity.badRequest().body(response);
+            throw new IllegalArgumentException("Адрес страницы не может быть пустым");
         }
 
-        try {
-            indexingService.indexPage(url);
-
-            response.put("result", true);
-            return ResponseEntity.ok(response);
-
-        } catch (IllegalArgumentException e) {
-            response.put("result", false);
-            response.put("error", "Данная страница находится за пределами сайтов, указанных в конфигурационном файле");
-            return ResponseEntity.badRequest().body(response);
-
-        } catch (Exception e) {
-            log.error("Ошибка при индексации страницы: {}", e.getMessage());
-            response.put("result", false);
-            response.put("error", "Произошла ошибка при индексации страницы");
-            return ResponseEntity.badRequest().body(response);
-        }
-
-
+        indexingService.indexPage(url);
+        return ResponseEntity.ok(Map.of("result", true));
     }
 
     @GetMapping("/stopIndexing")
     public ResponseEntity<Map<String, Object>> stopIndexing() {
-        try {
-            if (!indexingService.isIndexingRunning()) {
-                Map<String, Object> response = new HashMap<>();
-                response.put("result", false);
-                response.put("error", "Индексация не запущена");
-                return ResponseEntity.badRequest().body(response);
-            }
-
-            Map<String, Object> response = indexingService.stopIndexing();
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", false);
-            response.put("error", e.getMessage());
-            return ResponseEntity.badRequest().body(response);
+        if (!indexingService.isIndexingRunning()) {
+            throw new IllegalStateException("Индексация не запущена");
         }
-
+        return ResponseEntity.ok(indexingService.stopIndexing());
     }
 
     @GetMapping("/search")
@@ -128,27 +77,10 @@ public class ApiController {
             @RequestParam(value = "limit", defaultValue = "20") int limit) {
 
         if (query == null || query.trim().isEmpty()) {
-            Map<String, Object> errorResponse = new HashMap<>();
-            errorResponse.put("result", false);
-            errorResponse.put("error", "Задан пустой поисковый запрос");
-            return ResponseEntity.badRequest().body(errorResponse);
+            throw new IllegalArgumentException("Задан пустой поисковый запрос");
         }
 
-        try {
-            SearchResponse response = searchService.search(query, site, offset, limit);
-            return ResponseEntity.ok(response);
-        } catch (IndexNotReadyException e) {
-            Map<String, Object> errorResponse = new HashMap<>();
-            errorResponse.put("result", false);
-            errorResponse.put("error", e.getMessage());
-            return ResponseEntity.badRequest().body(errorResponse);
-        } catch (Exception e) {
-            log.error("Ошибка при выполнении поиска: {}", e.getMessage(), e);
-            Map<String, Object> errorResponse = new HashMap<>();
-            errorResponse.put("result", false);
-            errorResponse.put("error", "Произошла ошибка при выполнении поиска");
-            return ResponseEntity.badRequest().body(errorResponse);
-        }
+        SearchResponse response = searchService.search(query, site, offset, limit);
+        return ResponseEntity.ok(response);
     }
-
 }

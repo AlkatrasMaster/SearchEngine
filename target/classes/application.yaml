@@ -4,12 +4,12 @@ server:
 spring:
   datasource:
     username: root
-    password: SwKoToR32
+    password: SWKOTOR32
     url: jdbc:mysql://localhost:3306/search_engine?useSSL=false&requireSSL=false&allowPublicKeyRetrieval=true
 
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: create
     show-sql: true
     properties:
       hibernate:
