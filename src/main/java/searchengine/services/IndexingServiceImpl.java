@@ -69,58 +69,76 @@ public class IndexingServiceImpl implements IndexingService{
         log.info("Начало индексации...");
 
         try {
-            List<Site> configSites = sitesList.getSites();
-            List<Thread> threads = new ArrayList<>();
-
-            for (Site configSite : configSites) {
-                Thread thread = new Thread(() -> {
-                    SiteModel siteModel = null;
-                    try {
-                        // Удаление предыдущих записей
-                        Optional<SiteModel> existingSiteOpt = siteRepository.findByUrl(configSite.getUrl());
-                        if (existingSiteOpt.isPresent()) {
-                            SiteModel existingSite = existingSiteOpt.get();
-                            List<PageModel> oldPages = pageRepository.findAllBySiteModel(existingSite);
-                            for (PageModel page : oldPages) {
-                                lemmaService.removeLemmasAndIndexesForPage(page);
-                            }
-                            siteRepository.deleteByUrl(configSite.getUrl());
-                            pageRepository.deleteBySiteModelUrl(configSite.getUrl());
-                         }
-
-                        // Создание новой записи сайта
-                        siteModel = new SiteModel();
-                        siteModel.setUrl(configSite.getUrl());
-                        siteModel.setName(configSite.getName());
-                        siteModel.setStatus(IndexStatus.INDEXING);
-                        siteModel.setStatusTime(LocalDateTime.now());
-                        siteRepository.save(siteModel);
-
-                        processPages(siteModel);
-
-                        updateSiteStatus(siteModel, IndexStatus.INDEXED);
-                        log.info("Индексация завершена для {}", configSite.getUrl());
-
-                    } catch (Exception e) {
-                        log.error("Ошибка при обработке сайта {}: {}", configSite.getUrl(), e.getMessage());
-                        if (siteModel != null) {
-                            updateSiteStatusAndError(siteModel, IndexStatus.FAILED, e.getMessage());
-                        }
-                    }
-                });
-                thread.setName("IndexingThread-" + configSite.getName());
-                thread.start();
-                threads.add(thread);
-            }
-
-            // Ждем завершения всех потоков
-            for (Thread t : threads) {
-                t.join();
-            }
-
+            List<Site> configSite = sitesList.getSites();
+            List<Thread> threads = startIndexingForSites(configSite);
+            waitForThreadsToFinish(threads);
             log.info("Индексация завершена.");
         } finally {
             isIndexingRunning.set(false);
+        }
+    }
+
+    // Запуск потоков для сайтов
+    private List<Thread> startIndexingForSites(List<Site> configSites) {
+        List<Thread> threads = new ArrayList<>();
+
+        for (Site configSite : configSites) {
+            Thread thread = new Thread(() -> handleSiteIndexing(configSite));
+            thread.setName("IndexingThread-" + configSite.getName());
+            thread.start();
+            threads.add(thread);
+        }
+        return threads;
+    }
+
+    // Обработка одного сайта
+    private void handleSiteIndexing(Site configSite) {
+        SiteModel siteModel = null;
+        try {
+            removeOldSiteData(configSite);
+
+            siteModel = createNewSiteModel(configSite);
+            processPages(siteModel);
+            updateSiteStatus(siteModel, IndexStatus.INDEXED);
+
+            log.info("✅ Индексация завершена для {}", configSite.getUrl());
+        } catch (Exception e) {
+            log.error("Ошибка при обработке сайта {}: {}", configSite.getUrl(), e.getMessage());
+            if (siteModel != null) {
+                updateSiteStatusAndError(siteModel, IndexStatus.FAILED, e.getMessage());
+            }
+        }
+    }
+
+    // Удаление старых данных
+    private void removeOldSiteData(Site configSite) {
+        Optional<SiteModel> existingSiteOpt = siteRepository.findByUrl(configSite.getUrl());
+        if (existingSiteOpt.isPresent()) {
+            SiteModel existingSite = existingSiteOpt.get();
+            pageRepository.findAllBySiteModel(existingSite)
+                    .forEach(lemmaService :: removeLemmasAndIndexesForPage);
+            siteRepository.deleteByUrl(configSite.getUrl());
+            pageRepository.deleteBySiteModelUrl(configSite.getUrl());
+            log.info("Удалены старые данные для {}", configSite.getUrl());
+        }
+    }
+
+    // Создание новой записи сайта
+    private SiteModel createNewSiteModel(Site configSite) {
+        SiteModel siteModel = new SiteModel();
+        siteModel.setUrl(configSite.getUrl());
+        siteModel.setName(configSite.getName());
+        siteModel.setStatus(IndexStatus.INDEXING);
+        siteModel.setStatusTime(LocalDateTime.now());
+        siteRepository.save(siteModel);
+        log.info("Создана новая запись для сайта {}", configSite.getUrl());
+        return siteModel;
+    }
+
+    // Ожидание завершения потоков
+    private void waitForThreadsToFinish(List<Thread> threads) throws InterruptedException {
+        for (Thread thread : threads) {
+            thread.join();
         }
     }
 

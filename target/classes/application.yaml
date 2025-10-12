@@ -30,3 +30,7 @@ crawler-setting:
   user-agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (HTML, like Gecko) Chrome/74.0.3729.169 Safari/537.3"
   referrer: "https://www.google.com"
   delay-between-requests: [1200, 2000]
+
+crawler:
+  threshold: 100
+  max-depth: 10
