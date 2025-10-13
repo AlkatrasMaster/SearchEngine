@@ -26,6 +26,11 @@ import java.util.stream.Collectors;
 @Slf4j
 public class SearchServiceImpl implements SearchService{
 
+    // 🔧 Константы вместо "magic numbers"
+    private static final double LEMMA_FREQUENCY_THRESHOLD = 0.7;
+    private static final int DEFAULT_OFFSET = 0;
+    private static final int DEFAULT_LIMIT = 20;
+
     private final LemmaRepository lemmaRepository;
     private final IndexRepository indexRepository;
     private final PageRepository pageRepository;
@@ -94,7 +99,7 @@ public class SearchServiceImpl implements SearchService{
                     int totalPages = pageRepository.countBySiteModel(site);
                     double frequencyRatio = (double) lemma.getFrequency() / totalPages;
 
-                    if (frequencyRatio < 0.7) {
+                    if (frequencyRatio < LEMMA_FREQUENCY_THRESHOLD) {
                         filteredLemmas.add(lemma);
                         log.debug("Лемма '{}' оставлена для '{}', ratio={}", lemmaText, site.getUrl(), frequencyRatio);
                     }
@@ -134,8 +139,11 @@ public class SearchServiceImpl implements SearchService{
 
     // Постраничный вывод
     private SearchResponse paginateResults(List<SearchResult> results, int offset, int limit) {
-        int end = Math.min(offset + limit, results.size());
-        List<SearchResult> pageResults = results.subList(Math.min(offset, results.size()), end);
+        int effectiveOffset = Math.max(offset, DEFAULT_OFFSET);
+        int effectiveLimit = (limit <= 0) ? DEFAULT_LIMIT : limit;
+
+        int end = Math.min(effectiveOffset + effectiveLimit, results.size());
+        List<SearchResult> pageResults = results.subList(Math.min(effectiveOffset, results.size()), end);
 
         SearchResponse response = new SearchResponse();
         response.setResult(true);
